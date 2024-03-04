@@ -1,0 +1,22 @@
+# Copyright 2024 by Composable Foundation
+
+[package]
+name = "solana-sigverify"
+authors = ["Michal Nazarewicz <mina86@mina86.com>"]
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+library = []
+
+[dependencies]
+bytemuck = { version = "1.21", features = ["must_cast"] }
+derive_more = { version = "1", features = ["as_ref", "deref", "deref_mut", "from", "into"] }
+solana-program = "1.18.26"
+
+[dev-dependencies]
+ed25519-dalek = "=1.0.1"   # Must match solana-sdk’s dependency.]
+solana-sdk = "1.18.26"
