@@ -14,7 +14,7 @@ use solana_program::sysvar::{instructions, Sysvar};
 
 type Result<T = (), E = ProgramError> = core::result::Result<T, E>;
 
-use crate::{stdx, SigEntryError, SignatureHash, SignaturesAccount};
+use crate::{stdx, SignaturesAccount};
 
 solana_program::entrypoint!(process_instruction);
 
@@ -145,32 +145,18 @@ fn handle_update(
 /// callback for each signature specified in the instruction.
 fn process_ed25519_instruction(
     instruction: Instruction,
-    mut callback: impl FnMut(SignatureHash) -> Result,
+    mut callback: impl FnMut(crate::SignatureHash) -> Result,
 ) -> Result {
+    use crate::ed25519_program::Error;
+
     if !solana_program::ed25519_program::check_id(&instruction.program_id) {
         return Ok(());
     }
-    let data = instruction.data.as_slice();
-
-    // The instruction data is:
-    //   count:   u8
-    //   unused:  u8
-    //   offsets: [SignatureOffsets; count]
-    //   rest:    [u8]
-    stdx::split_at::<2, u8>(data)
-        .filter(|([_, zero], _)| *zero == 0)
-        .and_then(|([count, _], tail)| {
-            stdx::as_chunks::<14, u8>(tail).0.get(..usize::from(*count))
-        })
-        .ok_or(ProgramError::InvalidInstructionData)?
-        .iter()
-        .map(|entry| SignatureHash::from_ed25519_signature_entry(data, entry))
-        .try_for_each(|sig| match sig {
-            Ok(signature) => callback(signature),
-            Err(SigEntryError::UnsupportedFeature) => Ok(()),
-            Err(SigEntryError::BadData) => {
-                Err(ProgramError::InvalidInstructionData)
-            }
+    crate::ed25519_program::parse_data(instruction.data.as_slice())?
+        .try_for_each(|entry| match entry {
+            Ok(entry) => callback(entry.into()),
+            Err(Error::UnsupportedFeature) => Ok(()),
+            Err(Error::BadData) => Err(ProgramError::InvalidInstructionData),
         })
 }
 
@@ -184,7 +170,7 @@ struct Context<'a, 'info> {
 
     /// The Signatures account.  It’s address is a PDA using `[payer.key,
     /// seed_and_bump]` seeds.
-    signatures: crate::SignaturesAccount<'a, 'info>,
+    signatures: SignaturesAccount<'a, 'info>,
 
     /// Seed and bump used in PDA of the Signatures account.
     seed_and_bump: &'a [u8],

@@ -33,6 +33,23 @@ pub(crate) fn as_chunks<const N: usize, T>(slice: &[T]) -> (&[[T; N]], &[T]) {
     (head, tail)
 }
 
+/// Splits a slice into a slice of N-element arrays.
+pub(crate) fn as_chunks_mut<const N: usize, T>(
+    slice: &mut [T],
+) -> (&mut [[T; N]], &mut [T]) {
+    let () = AssertNonZero::<N>::OK;
+
+    let len = slice.len() / N;
+    let (head, tail) = slice.split_at_mut(len * N);
+
+    // SAFETY: We cast a slice of `len * N` elements into a slice of `len` many
+    // `N` elements chunks.
+    let head = unsafe {
+        std::slice::from_raw_parts_mut(head.as_mut_ptr().cast(), len)
+    };
+    (head, tail)
+}
+
 /// Divides one slice into two at an index, returning None if the slice is too
 /// short.
 // TODO(mina86): Use [T]::split_at_checked once that stabilises.

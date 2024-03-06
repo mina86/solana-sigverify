@@ -19,4 +19,5 @@ solana-program = "1.18.26"
 
 [dev-dependencies]
 ed25519-dalek = "=1.0.1"   # Must match solana-sdk’s dependency.]
+insta = "1.42.1"
 solana-sdk = "1.18.26"
