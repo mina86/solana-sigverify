@@ -4,7 +4,7 @@
 //! here.  Once such feature stabilise, it should be removed and clients updated
 //! to use newly stabilised functions instead.
 
-#![allow(clippy::let_unit_value)]
+#![allow(dead_code, clippy::let_unit_value)]
 
 /// Splits `&mut [u8; L + R]` into `(&mut [u8; L], &mut [u8; R])`.
 pub(crate) fn split_array_mut<
@@ -57,10 +57,30 @@ fn split_at_checked<T>(slice: &[T], mid: usize) -> Option<(&[T], &[T])> {
     (mid <= slice.len()).then(|| slice.split_at(mid))
 }
 
+/// Divides one slice into two at an index, returning None if the slice is too
+/// short.
+// TODO(mina86): Use [T]::split_at_mut_checked once that stabilises.
+fn split_at_mut_checked<T>(
+    slice: &mut [T],
+    mid: usize,
+) -> Option<(&mut [T], &mut [T])> {
+    (mid <= slice.len()).then(|| slice.split_at_mut(mid))
+}
+
 /// Splits `&[T]` into `(&[T; L], &[T])`.  Returns `None` if input is too
 /// shorter.
 pub(crate) fn split_at<const L: usize, T>(xs: &[T]) -> Option<(&[T; L], &[T])> {
     split_at_checked(xs, L).map(|(head, tail)| (head.try_into().unwrap(), tail))
+}
+
+
+/// Splits `&mut [T]` into `(&mut [T; L], &mut [T])`.  Returns `None` if input
+/// is too shorter.
+pub(crate) fn split_at_mut<const L: usize, T>(
+    xs: &mut [T],
+) -> Option<(&mut [T; L], &mut [T])> {
+    split_at_mut_checked(xs, L)
+        .map(|(head, tail)| (head.try_into().unwrap(), tail))
 }
 
 /// Asserts, at compile time, that `A + B == S`.
