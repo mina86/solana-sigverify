@@ -8,6 +8,6 @@ mod stdx;
 #[cfg(feature = "lib")]
 mod verifier;
 
-pub use api::{SignatureHash, SignaturesAccount};
+pub use api::{SigHash, SignaturesAccount};
 #[cfg(feature = "lib")]
 pub use verifier::Verifier;

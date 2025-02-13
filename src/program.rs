@@ -150,7 +150,7 @@ fn handle_update(
 /// callback for each signature specified in the instruction.
 fn process_ed25519_instruction(
     instruction: Instruction,
-    mut callback: impl FnMut(crate::SignatureHash) -> Result,
+    mut callback: impl FnMut(crate::SigHash) -> Result,
 ) -> Result {
     use crate::ed25519_program::Error;
 

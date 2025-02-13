@@ -29,13 +29,13 @@ type Result<T = (), E = ProgramError> = core::result::Result<T, E>;
     derive_more::Into,
 )]
 #[repr(transparent)]
-pub struct SignatureHash([u8; 32]);
+pub struct SigHash([u8; 32]);
 
-impl SignatureHash {
+impl SigHash {
     const ED25519_HASH_MAGIC: [u8; 8] = *b"ed25519\0";
-    const SIZE: usize = core::mem::size_of::<SignatureHash>();
+    const SIZE: usize = core::mem::size_of::<SigHash>();
 
-    /// Constructs a new SignatureHash for given Ed25519 signature.
+    /// Constructs a new SigHash for given Ed25519 signature.
     #[inline]
     pub fn new_ed25519(
         key: &[u8; 32],
@@ -61,14 +61,14 @@ impl SignatureHash {
     }
 }
 
-impl<'a> From<crate::ed25519_program::Entry<'a>> for SignatureHash {
+impl<'a> From<crate::ed25519_program::Entry<'a>> for SigHash {
     #[inline]
     fn from(entry: crate::ed25519_program::Entry<'a>) -> Self {
         Self::new_ed25519(entry.pubkey, entry.signature, entry.message)
     }
 }
 
-impl<'a> From<&crate::ed25519_program::Entry<'a>> for SignatureHash {
+impl<'a> From<&crate::ed25519_program::Entry<'a>> for SigHash {
     #[inline]
     fn from(entry: &crate::ed25519_program::Entry<'a>) -> Self {
         Self::new_ed25519(entry.pubkey, entry.signature, entry.message)
@@ -137,7 +137,7 @@ impl<'a, 'info> SignaturesAccount<'a, 'info> {
         message: &[u8],
     ) -> Result<bool> {
         let data = self.0.try_borrow_data()?;
-        let signature = SignatureHash::new_ed25519(key, signature, message);
+        let signature = SigHash::new_ed25519(key, signature, message);
         find_sighash(*data, signature)
     }
 
@@ -163,7 +163,7 @@ impl<'a, 'info> SignaturesAccount<'a, 'info> {
         let mut data = self.0.try_borrow_mut_data()?;
         let (head, tail) = stdx::split_at_mut::<{ HEAD_SIZE }, _>(*data)
             .ok_or(ProgramError::AccountDataTooSmall)?;
-        stdx::as_chunks_mut::<{ SignatureHash::SIZE }, _>(tail)
+        stdx::as_chunks_mut::<{ SigHash::SIZE }, _>(tail)
             .0
             .get_mut(..usize::try_from(count).unwrap())
             .ok_or(ProgramError::AccountDataTooSmall)?
@@ -180,7 +180,7 @@ impl<'a, 'info> SignaturesAccount<'a, 'info> {
     pub(crate) fn write_signature(
         &self,
         index: u32,
-        signature: &SignatureHash,
+        signature: &SigHash,
         enlarge: impl FnOnce() -> Result,
     ) -> Result {
         let range = (|| {
@@ -210,17 +210,14 @@ impl<'a, 'info> SignaturesAccount<'a, 'info> {
 ///
 /// Returns whether the signature has been found.  Returns an error if the
 /// account data is malformed.
-pub(crate) fn find_sighash(
-    data: &[u8],
-    signature: SignatureHash,
-) -> Result<bool> {
+pub(crate) fn find_sighash(data: &[u8], signature: SigHash) -> Result<bool> {
     let (head, tail) = stdx::split_at::<{ HEAD_SIZE }, _>(data)
         .ok_or(ProgramError::AccountDataTooSmall)?;
     let count = bytemuck::must_cast_ref::<_, Header>(head)
         .count()
         .try_into()
         .map_err(|_| ProgramError::InvalidAccountData)?;
-    let entries = stdx::as_chunks::<{ SignatureHash::SIZE }, _>(tail)
+    let entries = stdx::as_chunks::<{ SigHash::SIZE }, _>(tail)
         .0
         .get(..count)
         .ok_or(ProgramError::InvalidAccountData)?;
@@ -230,9 +227,9 @@ pub(crate) fn find_sighash(
 
 #[test]
 fn test_ed25519() {
-    let sig1 = SignatureHash::new_ed25519(&[11; 32], &[12; 64], b"foo");
-    let sig2 = SignatureHash::new_ed25519(&[21; 32], &[22; 64], b"bar");
-    let sig3 = SignatureHash::new_ed25519(&[31; 32], &[32; 64], b"frd");
+    let sig1 = SigHash::new_ed25519(&[11; 32], &[12; 64], b"foo");
+    let sig2 = SigHash::new_ed25519(&[21; 32], &[22; 64], b"bar");
+    let sig3 = SigHash::new_ed25519(&[31; 32], &[32; 64], b"frd");
 
     assert!(sig1.0 < sig2.0);
     assert!(sig2.0 < sig3.0);
