@@ -20,7 +20,15 @@ pub struct SignatureOffsets {
     pub message_instruction_index: u16, // index of instruction data to get message data
 }
 
-const ENTRY_SIZE: usize = core::mem::size_of::<SignatureOffsets>();
+/// A parse signature from the Ed25519 native program.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Entry<'a> {
+    pub signature: &'a [u8; 64],
+    pub pubkey: &'a [u8; 32],
+    pub message: &'a [u8],
+}
+
+const OFF_SIZE: usize = core::mem::size_of::<SignatureOffsets>();
 
 /// Creates an instruction calling Ed25519 signature verification native program
 /// which verifies specified signatures.
@@ -34,20 +42,23 @@ const ENTRY_SIZE: usize = core::mem::size_of::<SignatureOffsets>();
 /// will be included in the instruction data only once.  Furthermore, this
 /// function will try to do the same deduplication to prefixes of messages but
 /// for that to work entry for the longer message must come first.
+///
+/// Similarly, if multiple entries use the same public key, the public key will
+/// be included in the instruction only once.
 pub fn new_instruction(entries: &[Entry]) -> Option<Instruction> {
     u8::try_from(entries.len()).ok()?;
 
     // Calculate the length of the instruction.  If we manage to deduplicate
     // messages we may end up with something shorter.  This is the largest we
     // may possibly use.
-    let mut capacity = (2 + (ENTRY_SIZE + 64 + 32) * entries.len()) as u16;
+    let mut capacity = (2 + (OFF_SIZE + 64 + 32) * entries.len()) as u16;
     for entry in entries {
         let len = u16::try_from(entry.message.len()).ok()?;
         capacity = capacity.checked_add(len)?;
     }
 
     let mut data = Vec::with_capacity(usize::from(capacity));
-    let len = write_instruction_data(data.spare_capacity_mut(), entries).into();
+    let len = write_instruction_data(data.spare_capacity_mut(), entries);
     // SAFETY: Per interface of write_instruction_data, all data up to len bytes
     // have been initialised.
     unsafe { data.set_len(len) };
@@ -61,90 +72,86 @@ pub fn new_instruction(entries: &[Entry]) -> Option<Instruction> {
 
 /// Writes Ed25519 native program instruction data to given buffer.
 ///
-/// Assumes that `entries.len() ≤ 256`, `dst.len() ≤ u16::MAX` and `dst` can fit
+/// Assumes that `entries.len() < 256`, `dst.len() ≤ u16::MAX` and `dst` can fit
 /// all the data.  Returns length of the instruction (which is guaranteed to be
 /// no greater than `dst.len()`).  All data in `dst` up to returned index is
 /// initialised.
 fn write_instruction_data(
     dst: &mut [MaybeUninit<u8>],
     entries: &[Entry],
-) -> u16 {
+) -> usize {
     // The structure of the instruction data is:
-    //   count:   u16
+    //   count:   u8
+    //   zero:    u8
     //   entries: [SignatureOffsets; count]
     //   data:    [u8]
-    let len = 2 + entries.len() * ENTRY_SIZE;
-    let (head, mut data) = dst.split_at_mut(len);
-    let (count, entries_dst) = head.split_at_mut(2);
+    dst[0].write(entries.len() as u8);
+    dst[1].write(0);
+
+    let mut len = 2 + entries.len() * OFF_SIZE;
+    let (head, mut dst) = dst.split_at_mut(len);
     let (entries_dst, rest) =
-        stdx::as_chunks_mut::<{ ENTRY_SIZE }, _>(entries_dst);
+        stdx::as_chunks_mut::<{ OFF_SIZE }, _>(&mut head[2..]);
     assert_eq!((entries.len(), 0), (entries_dst.len(), rest.len()));
 
-    count[0].write(entries.len() as u8);
-    count[1].write(0);
+    macro_rules! append {
+        ($slice:expr) => {{
+            let (head, tail) = dst.split_at_mut($slice.len());
+            stdx::write_slice(head, $slice);
+            dst = tail;
+            let ret = len;
+            len += $slice.len();
+            ret as u16
+        }};
+    }
 
-    let mut len = len as u16;
-    for (index, entry) in entries.iter().enumerate() {
-        let Entry { signature, pubkey, message } = entry;
+    for idx in 0..entries.len() {
+        let Entry { signature, pubkey, message } = entries[idx];
 
-        // Append message however first check if it’s not a duplicate.
-        let pos = entries[..index]
+        // Append message but deduplicate if the message has already been used
+        // or the message is prefix of a message which has already been used.
+        let pos = entries[..idx]
             .iter()
-            .position(|entry| entry.message.starts_with(message));
+            .position(|ent| ent.message.starts_with(message));
         let message_data_offset = if let Some(pos) = pos {
-            let offset = &entries_dst[pos][8..10];
-            // SAFETY: All previous entries have been initialised.
+            let offsets = &entries_dst[pos];
+            // SAFETY: All offsets prior to idx have been initialised.
             u16::from_le_bytes(unsafe {
-                [offset[0].assume_init(), offset[1].assume_init()]
+                [offsets[8].assume_init(), offsets[9].assume_init()]
             })
         } else {
-            data = memcpy(data, message);
-            let offset = len;
-            len += message.len() as u16;
-            offset
+            append!(message)
         };
 
-        // Append signature and public key.
-        data = memcpy(data, &signature[..]);
-        data = memcpy(data, &pubkey[..]);
+        // Append signature.
+        let signature_offset = append!(signature);
 
+        // Append pubkey, but deduplicate if the key has already been used.
+        let pos = entries[..idx].iter().position(|ent| ent.pubkey == pubkey);
+        let public_key_offset = if let Some(pos) = pos {
+            let offsets = &entries_dst[pos];
+            // SAFETY: All offsets prior to idx have been initialised.
+            u16::from_le_bytes(unsafe {
+                [offsets[4].assume_init(), offsets[5].assume_init()]
+            })
+        } else {
+            append!(pubkey)
+        };
+
+        // Fill in the entry.
         let offsets = SignatureOffsets {
-            signature_offset: u16::from_le(len),
+            signature_offset: u16::from_le(signature_offset),
             signature_instruction_index: u16::MAX,
-            public_key_offset: u16::from_le(len + 64),
+            public_key_offset: u16::from_le(public_key_offset),
             public_key_instruction_index: u16::MAX,
             message_data_offset: u16::from_le(message_data_offset),
-            message_data_size: entry.message.len() as u16,
+            message_data_size: message.len() as u16,
             message_instruction_index: u16::MAX,
         };
-        write_slice(&mut entries_dst[index], bytemuck::bytes_of(&offsets));
-
-        len += 64 + 32;
+        stdx::write_slice(&mut entries_dst[idx], bytemuck::bytes_of(&offsets));
     }
 
     len
-}
-
-/// Copies the elements from `src` to the start of `dst`; returns part of `dst`
-/// after written data.
-///
-/// Based on MaybeUninit::write_slice which is a nightly feature.
-fn memcpy<'a>(
-    dst: &'a mut [MaybeUninit<u8>],
-    src: &[u8],
-) -> &'a mut [MaybeUninit<u8>] {
-    let (head, tail) = dst.split_at_mut(src.len());
-    write_slice(head, src);
-    tail
-}
-
-/// Copies the elements from `src` to `dst`.
-///
-/// This is copy of MaybeUninit::write_slice which is a nightly feature.
-fn write_slice(dst: &mut [MaybeUninit<u8>], src: &[u8]) {
-    // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout
-    let src: &[MaybeUninit<u8>] = unsafe { core::mem::transmute(src) };
-    dst.copy_from_slice(src)
 }
 
 
@@ -193,14 +200,6 @@ pub fn parse_data(data: &[u8]) -> Result<Iter, BadData> {
 pub struct Iter<'a> {
     entries: core::slice::Iter<'a, [u8; 14]>,
     data: &'a [u8],
-}
-
-/// A parse signature from the Ed25519 native program.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Entry<'a> {
-    pub signature: &'a [u8; 64],
-    pub pubkey: &'a [u8; 32],
-    pub message: &'a [u8],
 }
 
 /// Error when parsing Ed25519 signature.
@@ -322,20 +321,6 @@ mod test {
 
     use super::*;
 
-    fn make_signature(message: &[u8]) -> (Keypair, [u8; 64], [u8; 32]) {
-        pub const KEYPAIR: [u8; 64] = [
-            99, 241, 33, 162, 28, 57, 15, 190, 246, 156, 30, 188, 100, 125,
-            110, 174, 37, 123, 198, 137, 90, 220, 247, 230, 191, 238, 71, 217,
-            207, 176, 67, 112, 18, 10, 242, 85, 239, 109, 138, 32, 37, 117, 17,
-            6, 184, 125, 216, 16, 222, 201, 241, 41, 225, 95, 171, 115, 85,
-            114, 249, 152, 205, 71, 25, 89,
-        ];
-        let keypair = ed25519_dalek::Keypair::from_bytes(&KEYPAIR).unwrap();
-        let signature = keypair.sign(message).to_bytes();
-        let pubkey = keypair.public.to_bytes();
-        (keypair, signature, pubkey)
-    }
-
     macro_rules! make_test {
         ($name:ident;
          let $ctx:ident = $prepare:expr;
@@ -408,41 +393,36 @@ mod test {
         }
     }
 
+    const KEYPAIR1: [u8; 64] = [
+        99, 241, 33, 162, 28, 57, 15, 190, 246, 156, 30, 188, 100, 125, 110,
+        174, 37, 123, 198, 137, 90, 220, 247, 230, 191, 238, 71, 217, 207, 176,
+        67, 112, 18, 10, 242, 85, 239, 109, 138, 32, 37, 117, 17, 6, 184, 125,
+        216, 16, 222, 201, 241, 41, 225, 95, 171, 115, 85, 114, 249, 152, 205,
+        71, 25, 89,
+    ];
+
+    fn make_signature(
+        message: &[u8],
+        keypair: &[u8; 64],
+    ) -> ([u8; 64], [u8; 32], Keypair) {
+        let keypair = ed25519_dalek::Keypair::from_bytes(keypair).unwrap();
+        let signature = keypair.sign(message).to_bytes();
+        let pubkey = keypair.public.to_bytes();
+        (signature, pubkey, keypair)
+    }
+
     make_test! {
         single_signature;
-        let ctx = make_signature(b"message");
-        new_ed25519_instruction(&ctx.0, b"message").data;
-        Entry { signature: &ctx.1, pubkey: &ctx.2, message: b"message" }
-    }
-
-    make_test! {
-        two_signatures;
-        let ctx = prepare_two_signatures_test(b"foo", b"bar");
-        ctx.3;
-        Entry { signature: &ctx.0, pubkey: &ctx.2, message: b"foo" },
-        Entry { signature: &ctx.1, pubkey: &ctx.2, message: b"bar" }
-    }
-
-    make_test! {
-        two_signatures_same_message;
-        let ctx = prepare_two_signatures_test(b"foo", b"foo");
-        ctx.3;
-        Entry { signature: &ctx.0, pubkey: &ctx.2, message: b"foo" },
-        Entry { signature: &ctx.1, pubkey: &ctx.2, message: b"foo" }
-    }
-
-    make_test! {
-        two_signatures_prefix_message;
-        let ctx = prepare_two_signatures_test(b"foo", b"fo");
-        ctx.3;
-        Entry { signature: &ctx.0, pubkey: &ctx.2, message: b"foo" },
-        Entry { signature: &ctx.1, pubkey: &ctx.2, message: b"fo" }
+        let ctx = make_signature(b"message", &KEYPAIR1);
+        new_ed25519_instruction(&ctx.2, b"message").data;
+        Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"message" }
     }
 
     fn prepare_two_signatures_test(
         msg1: &[u8],
         msg2: &[u8],
-    ) -> ([u8; 64], [u8; 64], [u8; 32], Vec<u8>) {
+        keypair2: &[u8; 64],
+    ) -> ([u8; 64], [u8; 32], [u8; 64], [u8; 32], Vec<u8>) {
         const SIG_SIZE: u16 = 64;
         const KEY_SIZE: u16 = 32;
         const HEADER_SIZE: u16 = 2 + 2 * 14;
@@ -471,20 +451,76 @@ mod test {
             /* msg_ix_idx: */ u16::MAX,
         ];
 
-        let (_, sig1, pubkey) = make_signature(msg1);
-        let (_, sig2, _) = make_signature(msg2);
+        let (sig1, pubkey1, _) = make_signature(msg1, &KEYPAIR1);
+        let (sig2, pubkey2, _) = make_signature(msg2, &keypair2);
 
         let data = [
             bytemuck::bytes_of(&header),
             sig1.as_ref(),
-            pubkey.as_ref(),
+            pubkey1.as_ref(),
             msg1,
             sig2.as_ref(),
-            pubkey.as_ref(),
+            pubkey2.as_ref(),
             msg2,
         ]
         .concat();
 
-        (sig1, sig2, pubkey, data)
+        (sig1, pubkey1, sig2, pubkey2, data)
+    }
+
+    make_test! {
+        two_signatures;
+        let ctx = prepare_two_signatures_test(b"foo", b"bar", &KEYPAIR1);
+        ctx.4;
+        Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"foo" },
+        Entry { signature: &ctx.2, pubkey: &ctx.3, message: b"bar" }
+    }
+
+    make_test! {
+        two_signatures_same_message;
+        let ctx = prepare_two_signatures_test(b"foo", b"foo", &KEYPAIR1);
+        ctx.4;
+        Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"foo" },
+        Entry { signature: &ctx.2, pubkey: &ctx.3, message: b"foo" }
+    }
+
+    make_test! {
+        two_signatures_prefix_message;
+        let ctx = prepare_two_signatures_test(b"foo", b"fo", &KEYPAIR1);
+        ctx.4;
+        Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"foo" },
+        Entry { signature: &ctx.2, pubkey: &ctx.3, message: b"fo" }
+    }
+
+    const KEYPAIR2: [u8; 64] = [
+        157, 97, 177, 157, 239, 253, 90, 96, 186, 132, 74, 244, 146, 236, 44,
+        196, 68, 73, 197, 105, 123, 50, 105, 25, 112, 59, 172, 3, 28, 174, 127,
+        96, 215, 90, 152, 1, 130, 177, 10, 183, 213, 75, 254, 211, 201, 100, 7,
+        58, 14, 225, 114, 243, 218, 166, 35, 37, 175, 2, 26, 104, 247, 7, 81,
+        26,
+    ];
+
+    make_test! {
+        two_signatures_diff_keys;
+        let ctx = prepare_two_signatures_test(b"foo", b"bar", &KEYPAIR2);
+        ctx.4;
+        Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"foo" },
+        Entry { signature: &ctx.2, pubkey: &ctx.3, message: b"bar" }
+    }
+
+    make_test! {
+        two_signatures_same_message_diff_keys;
+        let ctx = prepare_two_signatures_test(b"foo", b"foo", &KEYPAIR2);
+        ctx.4;
+        Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"foo" },
+        Entry { signature: &ctx.2, pubkey: &ctx.3, message: b"foo" }
+    }
+
+    make_test! {
+        two_signatures_prefix_message_diff_keys;
+        let ctx = prepare_two_signatures_test(b"foo", b"fo", &KEYPAIR2);
+        ctx.4;
+        Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"foo" },
+        Entry { signature: &ctx.2, pubkey: &ctx.3, message: b"fo" }
     }
 }

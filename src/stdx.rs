@@ -6,6 +6,9 @@
 
 #![allow(dead_code, clippy::let_unit_value)]
 
+use core::mem::MaybeUninit;
+
+
 /// Splits `&mut [u8; L + R]` into `(&mut [u8; L], &mut [u8; R])`.
 pub(crate) fn split_array_mut<
     const L: usize,
@@ -19,6 +22,7 @@ pub(crate) fn split_array_mut<
     let (left, right) = xs.split_at_mut(L);
     (left.try_into().unwrap(), right.try_into().unwrap())
 }
+
 
 /// Splits a slice into a slice of N-element arrays.
 pub(crate) fn as_chunks<const N: usize, T>(slice: &[T]) -> (&[[T; N]], &[T]) {
@@ -50,6 +54,7 @@ pub(crate) fn as_chunks_mut<const N: usize, T>(
     (head, tail)
 }
 
+
 /// Divides one slice into two at an index, returning None if the slice is too
 /// short.
 // TODO(mina86): Use [T]::split_at_checked once that stabilises.
@@ -73,7 +78,6 @@ pub(crate) fn split_at<const L: usize, T>(xs: &[T]) -> Option<(&[T; L], &[T])> {
     split_at_checked(xs, L).map(|(head, tail)| (head.try_into().unwrap(), tail))
 }
 
-
 /// Splits `&mut [T]` into `(&mut [T; L], &mut [T])`.  Returns `None` if input
 /// is too shorter.
 pub(crate) fn split_at_mut<const L: usize, T>(
@@ -93,4 +97,14 @@ impl<const A: usize, const B: usize, const S: usize> AssertEqSum<A, B, S> {
 struct AssertNonZero<const N: usize>;
 impl<const N: usize> AssertNonZero<N> {
     const OK: () = assert!(N != 0);
+}
+
+
+/// Copies the elements from `src` to `dst`.
+///
+/// This is copy of MaybeUninit::write_slice which is a nightly feature.
+pub(crate) fn write_slice(dst: &mut [MaybeUninit<u8>], src: &[u8]) {
+    // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout
+    let src: &[MaybeUninit<u8>] = unsafe { core::mem::transmute(src) };
+    dst.copy_from_slice(src);
 }
