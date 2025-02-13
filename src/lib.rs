@@ -2,7 +2,9 @@ extern crate alloc;
 
 pub mod algo;
 mod api;
-#[cfg(not(feature = "lib"))]
+#[cfg(feature = "client")]
+pub mod instruction;
+#[cfg(not(any(feature = "client", feature = "lib")))]
 mod program;
 mod stdx;
 #[cfg(feature = "lib")]

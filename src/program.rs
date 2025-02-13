@@ -78,9 +78,10 @@ solana_program::entrypoint!(process_instruction);
 /// }
 /// ```
 ///
-/// It takes two required accounts:
-/// 1. Payer account (signer, writable) and
-/// 2. Signatures account (writable).
+/// It takes three required accounts:
+/// 1. Payer account (signer, writable),
+/// 2. Signatures account (writable) and
+/// 3. System program (should be `11111111111111111111111111111111`).
 ///
 /// It frees the Signatures account transferring all lamports to the payer.
 fn process_instruction<'a>(
