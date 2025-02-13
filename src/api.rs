@@ -87,7 +87,7 @@ struct Header {
 impl Header {
     fn count(&self) -> u32 { u32::from_le_bytes(self.count_le) }
 
-    #[cfg(any(test, not(feature = "library")))]
+    #[cfg(any(test, not(feature = "lib")))]
     fn get_count(&self, want_epoch: Option<u64>) -> u32 {
         match want_epoch {
             Some(want) if want != u64::from_le_bytes(self.epoch_le) => 0,
@@ -95,7 +95,7 @@ impl Header {
         }
     }
 
-    #[cfg(any(test, not(feature = "library")))]
+    #[cfg(any(test, not(feature = "lib")))]
     fn set(&mut self, epoch: Option<u64>, count: u32) {
         if let Some(epoch) = epoch {
             self.epoch_le = epoch.to_le_bytes();
@@ -145,7 +145,7 @@ impl<'a, 'info> SignaturesAccount<'a, 'info> {
     ///
     /// If `want_epoch` is `Some` and epoch stored in the account doesn’t match
     /// the one given, returns zero.
-    #[cfg(any(test, not(feature = "library")))]
+    #[cfg(any(test, not(feature = "lib")))]
     pub(crate) fn read_count(&self, want_epoch: Option<u64>) -> Result<u32> {
         let data = self.0.try_borrow_data()?;
         let (head, _) = stdx::split_at::<{ HEAD_SIZE }, u8>(&data)
@@ -154,7 +154,7 @@ impl<'a, 'info> SignaturesAccount<'a, 'info> {
     }
 
     /// Sets number of signatures saved in the account and sort the entries.
-    #[cfg(any(test, not(feature = "library")))]
+    #[cfg(any(test, not(feature = "lib")))]
     pub(crate) fn write_count_and_sort(
         &self,
         epoch: Option<u64>,
@@ -176,7 +176,7 @@ impl<'a, 'info> SignaturesAccount<'a, 'info> {
     ///
     /// If the account isn’t large enough to hold `index` entries, calls
     /// `enlarge` to resize the account.
-    #[cfg(any(test, not(feature = "library")))]
+    #[cfg(any(test, not(feature = "lib")))]
     pub(crate) fn write_signature(
         &self,
         index: u32,
