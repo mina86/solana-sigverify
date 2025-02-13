@@ -1,5 +1,5 @@
 ---
-source: solana/signature-verifier/src/ed25519_program.rs
+source: src/verify_program.rs
 expression: data.as_slice()
 ---
 [

@@ -14,7 +14,7 @@ use solana_program::sysvar::{instructions, Sysvar};
 
 type Result<T = (), E = ProgramError> = core::result::Result<T, E>;
 
-use crate::{stdx, SignaturesAccount};
+use crate::{stdx, SigHash, SignaturesAccount};
 
 solana_program::entrypoint!(process_instruction);
 
@@ -49,7 +49,8 @@ solana_program::entrypoint!(process_instruction);
 /// 4. System program (optional; should be `11111111111111111111111111111111`).
 ///
 /// The smart contract expects instruction priory to the current one to be call
-/// to the Ed25519 native program.  It parses the instruction to determine which
+/// to a native signature verification program (i.e. Ed25519, Secp256k1 or
+/// Secp256r1 program).  It parses the instruction to determine which
 /// instructions the program verified.  All those signatures are added to the
 /// Signatures account.  [`SignaturesAccount`] provides abstraction which allows
 /// checking whether particular signature has been aggregated.
@@ -121,15 +122,15 @@ fn handle_update(
     ctx.initialise_signatures_account()?;
     let mut count = ctx.signatures.read_count(epoch)?;
 
-    // Get the previous instruction.  We expect it to be a call to Ed25519
-    // native program.
+    // Get the previous instruction.  We expect it to be a call to a signature
+    // verification native program.
     let ix_sysvar =
         accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
     let prev_ix = instructions::get_instruction_relative(-1, ix_sysvar)?;
 
-    // Parse signatures from the call to the Ed25519 signature verification
-    // native program and copy them to the Signatures account.
-    process_ed25519_instruction(prev_ix, |signature| {
+    // Parse signatures from the call to the signature verification native
+    // program and copy them to the Signatures account.
+    process_verify_instruction(prev_ix, |signature| {
         ctx.signatures.write_signature(count, &signature, || {
             ctx.enlarge_signatures_account()
         })?;
@@ -143,23 +144,24 @@ fn handle_update(
 }
 
 
-/// Extracts signatures from a call to Ed25519 native program.
+/// Extracts signatures from a call to signature verification native program.
 ///
-/// If the `instruction` doesn’t correspond to call to the Ed25519 signature
+/// If the `instruction` doesn’t correspond to call to a supported signature
 /// verification native program, does nothing.  Otherwise invokes specified
 /// callback for each signature specified in the instruction.
-fn process_ed25519_instruction(
+fn process_verify_instruction(
     instruction: Instruction,
-    mut callback: impl FnMut(crate::SigHash) -> Result,
+    mut callback: impl FnMut(SigHash) -> Result,
 ) -> Result {
-    use crate::ed25519_program::Error;
+    use crate::verify_program::Error;
 
-    if !solana_program::ed25519_program::check_id(&instruction.program_id) {
-        return Ok(());
-    }
-    crate::ed25519_program::parse_data(instruction.data.as_slice())?
+    let magic = match crate::algo::from_id(instruction.program_id) {
+        Some(magic) => magic,
+        None => return Ok(()),
+    };
+    crate::verify_program::parse_data(instruction.data.as_slice())?
         .try_for_each(|entry| match entry {
-            Ok(entry) => callback(entry.into()),
+            Ok(entry) => callback(SigHash::from_entry(magic, entry)),
             Err(Error::UnsupportedFeature) => Ok(()),
             Err(Error::BadData) => Err(ProgramError::InvalidInstructionData),
         })

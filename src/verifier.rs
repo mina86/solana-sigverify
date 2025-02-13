@@ -3,16 +3,18 @@ use solana_program::program_error::ProgramError;
 use solana_program::pubkey::Pubkey;
 use solana_program::sysvar::instructions::get_instruction_relative;
 
-use crate::ed25519_program;
-use crate::ed25519_program::Entry;
+use crate::verify_program::Entry;
+use crate::{algo, verify_program};
 
 type AccountData<'a> = alloc::rc::Rc<core::cell::RefCell<&'a mut [u8]>>;
 type Result<T = (), E = ProgramError> = core::result::Result<T, E>;
 
-/// An Ed25519 signature verifier.
+
+/// A signature verifier.
 ///
 /// It has two methods of checking signatures.  First is traditional method used
-/// on Solana which is to look for instruction invoking Ed25519 native program
+/// on Solana which is to look for instruction invoking a native signature
+/// verification program (i.e. Ed25519, Secp256k1 or Secp256r1 native program)
 /// and scan which signatures that program attested.
 ///
 /// Second is taking advantage of the sigverify program implemented by
@@ -20,14 +22,26 @@ type Result<T = (), E = ProgramError> = core::result::Result<T, E>;
 /// multiple calls to the native program and this verifier accesses that account
 /// to look for signatures being checked.
 #[derive(Clone)]
-pub struct Verifier<'info> {
-    /// Instruction data of a call to Ed25519 native program.
-    ed25519_data: Option<Vec<u8>>,
+pub struct Verifier<'info, Algo> {
+    /// Instruction data of a call to a native signature verification program.
+    native_data: Option<Vec<u8>>,
 
     /// Account data owned by sigverify program with aggregated signature
     /// checks.
     sigverify_data: Option<AccountData<'info>>,
+
+    phantom: core::marker::PhantomData<Algo>,
 }
+
+/// An Ed25519 signature verifier.
+pub type Ed25519Verifier<'info> = Verifier<'info, algo::Ed25519>;
+
+/// An Secp256k1 signature verifier.
+pub type Secp256k1Verifier<'info> = Verifier<'info, algo::Secp256k1>;
+
+/// An Secp256r1 signature verifier.
+pub type Secp256r1Verifier<'info> = Verifier<'info, algo::Secp256r1>;
+
 
 /// Error during signature verification.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -47,18 +61,24 @@ pub enum Error {
     BorrowFailed,
 }
 
-impl Default for Verifier<'_> {
-    /// Creates a new verifier;
+impl<Algo> Default for Verifier<'_, Algo> {
+    /// Creates a new verifier for checking
     ///
     /// After creating the verifier it must be initialised with instructions
     /// sysvar program (see [`Self::set_ix_sysvar`]) or account belonging to the
     /// sigverify program (see [`Self::set_sigverify_account`]).  Unless at
     /// least on of those is initialised, the verifier will reject all
     /// signatures.
-    fn default() -> Self { Self { ed25519_data: None, sigverify_data: None } }
+    fn default() -> Self {
+        Self {
+            native_data: None,
+            sigverify_data: None,
+            phantom: Default::default(),
+        }
+    }
 }
 
-impl<'info> Verifier<'info> {
+impl<'info, Algo: algo::Algorithm> Verifier<'info, Algo> {
     /// Specifies instructions sysvar to use to get call to Ed25519 native
     /// program.
     ///
@@ -72,8 +92,8 @@ impl<'info> Verifier<'info> {
     #[inline]
     pub fn set_ix_sysvar(&mut self, account: &AccountInfo) -> Result {
         let ix = get_instruction_relative(-1, account)?;
-        if solana_program::ed25519_program::check_id(&ix.program_id) {
-            self.ed25519_data = Some(ix.data);
+        if Algo::check_id(ix.program_id) {
+            self.native_data = Some(ix.data);
             Ok(())
         } else {
             Err(ProgramError::IncorrectProgramId)
@@ -111,14 +131,14 @@ impl<'info> Verifier<'info> {
         signature: &[u8; 64],
     ) -> Result<bool, Error> {
         let entry = Entry { signature, pubkey, message };
-        if let Some(data) = self.ed25519_data.as_ref() {
-            if check_ed25519_data(data.as_slice(), &entry)? {
+        if let Some(data) = self.native_data.as_ref() {
+            if check_native_data(data.as_slice(), &entry)? {
                 return Ok(true);
             }
         }
         if let Some(data) = self.sigverify_data.as_ref() {
             let data = data.try_borrow().map_err(|_| Error::BorrowFailed)?;
-            if check_sigverify_data(data.as_ref(), &entry)? {
+            if check_sigverify_data(data.as_ref(), Algo::magic(), entry)? {
                 return Ok(true);
             }
         }
@@ -126,13 +146,13 @@ impl<'info> Verifier<'info> {
     }
 }
 
-/// Checks that given signature exists in given Ed25519 call instruction.
-fn check_ed25519_data(data: &[u8], entry: &Entry) -> Result<bool, Error> {
-    for item in ed25519_program::parse_data(data)? {
+/// Checks that given signature exists in given native program call instruction.
+fn check_native_data(data: &[u8], entry: &Entry) -> Result<bool, Error> {
+    for item in verify_program::parse_data(data)? {
         match item.map(|item| item == *entry) {
             Ok(true) => return Ok(true),
             Ok(false) => (),
-            Err(ed25519_program::Error::UnsupportedFeature) => (),
+            Err(verify_program::Error::UnsupportedFeature) => (),
             Err(_) => return Err(Error::BadData),
         }
     }
@@ -141,13 +161,17 @@ fn check_ed25519_data(data: &[u8], entry: &Entry) -> Result<bool, Error> {
 
 /// Checks that given sigverify account with aggregated signatures contains
 /// given entry.
-fn check_sigverify_data(data: &[u8], entry: &Entry) -> Result<bool, Error> {
-    crate::api::find_sighash(data, crate::SigHash::from(entry))
+fn check_sigverify_data(
+    data: &[u8],
+    magic: algo::Magic,
+    entry: Entry,
+) -> Result<bool, Error> {
+    crate::api::find_sighash(data, crate::SigHash::from_entry(magic, entry))
         .map_err(|_| Error::BadData)
 }
 
-impl From<crate::ed25519_program::BadData> for Error {
-    fn from(_: crate::ed25519_program::BadData) -> Self { Self::BadData }
+impl From<verify_program::BadData> for Error {
+    fn from(_: verify_program::BadData) -> Self { Self::BadData }
 }
 
 impl From<Error> for ProgramError {

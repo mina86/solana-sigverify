@@ -2,7 +2,8 @@ use solana_program::account_info::AccountInfo;
 use solana_program::program_error::ProgramError;
 use solana_program::pubkey::Pubkey;
 
-use crate::stdx;
+use crate::verify_program::Entry;
+use crate::{algo, stdx};
 
 type Result<T = (), E = ProgramError> = core::result::Result<T, E>;
 
@@ -32,46 +33,42 @@ type Result<T = (), E = ProgramError> = core::result::Result<T, E>;
 pub struct SigHash([u8; 32]);
 
 impl SigHash {
-    const ED25519_HASH_MAGIC: [u8; 8] = *b"ed25519\0";
+    /// Magic token used to identify Ed25519 signatures.
+    pub const ED25519_MAGIC: algo::Magic = algo::Ed25519::MAGIC;
+    /// Magic token used to identify Secp256k1 signatures.
+    pub const SECP256K1_MAGIC: algo::Magic = algo::Secp256k1::MAGIC;
+    /// Magic token used to identify Secp256r1 signatures.
+    pub const SECP256R1_MAGIC: algo::Magic = algo::Secp256r1::MAGIC;
+
     const SIZE: usize = core::mem::size_of::<SigHash>();
 
-    /// Constructs a new SigHash for given Ed25519 signature.
+    /// Constructs a new SigHash for given signature.
+    ///
+    /// `magic` identifies type of signature and is typically one of
+    /// [`Self::ED25519_MAGIC`], [`Self::SECP256K1_MAGIC`] or
+    /// [`Self::SECP256R1_MAGIC`].
     #[inline]
-    pub fn new_ed25519(
-        key: &[u8; 32],
-        signature: &[u8; 64],
-        message: &[u8],
-    ) -> Self {
-        Self::new(Self::ED25519_HASH_MAGIC, key, signature, message)
-    }
-
-    fn new(
-        magic: [u8; 8],
-        key: &[u8; 32],
+    pub fn new(
+        magic: algo::Magic,
+        pubkey: &[u8; 32],
         signature: &[u8; 64],
         message: &[u8],
     ) -> Self {
         let hash = solana_program::hash::hashv(&[
-            &magic[..],
-            &key[..],
+            &magic.to_bytes(),
+            &pubkey[..],
             &signature[..],
             message,
         ]);
         Self(hash.to_bytes())
     }
-}
 
-impl<'a> From<crate::ed25519_program::Entry<'a>> for SigHash {
+    /// Constructs a new SigHash from an [`Entry`].
+    ///
+    /// `magic` identifies type of signature (see [`Self::new`]).
     #[inline]
-    fn from(entry: crate::ed25519_program::Entry<'a>) -> Self {
-        Self::new_ed25519(entry.pubkey, entry.signature, entry.message)
-    }
-}
-
-impl<'a> From<&crate::ed25519_program::Entry<'a>> for SigHash {
-    #[inline]
-    fn from(entry: &crate::ed25519_program::Entry<'a>) -> Self {
-        Self::new_ed25519(entry.pubkey, entry.signature, entry.message)
+    pub fn from_entry(magic: algo::Magic, entry: Entry) -> Self {
+        Self::new(magic, entry.pubkey, entry.signature, entry.message)
     }
 }
 
@@ -130,14 +127,15 @@ impl<'a, 'info> SignaturesAccount<'a, 'info> {
     }
 
     /// Looks for given signature in the account data.
-    pub fn find_ed25519(
+    pub fn find(
         &self,
-        key: &[u8; 32],
+        magic: algo::Magic,
+        pubkey: &[u8; 32],
         signature: &[u8; 64],
         message: &[u8],
     ) -> Result<bool> {
         let data = self.0.try_borrow_data()?;
-        let signature = SigHash::new_ed25519(key, signature, message);
+        let signature = SigHash::new(magic, pubkey, signature, message);
         find_sighash(*data, signature)
     }
 
@@ -227,10 +225,15 @@ pub(crate) fn find_sighash(data: &[u8], signature: SigHash) -> Result<bool> {
 
 #[test]
 fn test_ed25519() {
-    let sig1 = SigHash::new_ed25519(&[11; 32], &[12; 64], b"foo");
-    let sig2 = SigHash::new_ed25519(&[21; 32], &[22; 64], b"bar");
-    let sig3 = SigHash::new_ed25519(&[31; 32], &[32; 64], b"frd");
+    use algo::Algorithm;
 
+    const MAGIC: algo::Magic = algo::Ed25519::MAGIC;
+
+    let sig1 = algo::Ed25519::sighash(&[11; 32], &[12; 64], b"FOO");
+    let sig2 = algo::Ed25519::sighash(&[21; 32], &[22; 64], b"bar");
+    let sig3 = algo::Ed25519::sighash(&[31; 32], &[32; 64], b"qux");
+
+    // This ordering is necessary for tests to work.
     assert!(sig1.0 < sig2.0);
     assert!(sig2.0 < sig3.0);
 
@@ -259,23 +262,23 @@ fn test_ed25519() {
     let nah = Ok(false);
 
     assert_eq!(Ok(0), signatures.read_count(None));
-    assert_eq!(nah, signatures.find_ed25519(&[11; 32], &[12; 64], b"foo"));
-    assert_eq!(nah, signatures.find_ed25519(&[21; 32], &[22; 64], b"bar"));
+    assert_eq!(nah, signatures.find(MAGIC, &[11; 32], &[12; 64], b"FOO"));
+    assert_eq!(nah, signatures.find(MAGIC, &[21; 32], &[22; 64], b"bar"));
 
     signatures.write_count_and_sort(None, 1).unwrap();
     assert_eq!(Ok(1), signatures.read_count(None));
-    assert_eq!(yes, signatures.find_ed25519(&[11; 32], &[12; 64], b"foo"));
-    assert_eq!(nah, signatures.find_ed25519(&[21; 32], &[22; 64], b"bar"));
+    assert_eq!(yes, signatures.find(MAGIC, &[11; 32], &[12; 64], b"FOO"));
+    assert_eq!(nah, signatures.find(MAGIC, &[21; 32], &[22; 64], b"bar"));
 
     signatures.write_count_and_sort(None, 2).unwrap();
     assert_eq!(Ok(2), signatures.read_count(None));
-    assert_eq!(yes, signatures.find_ed25519(&[11; 32], &[12; 64], b"foo"));
-    assert_eq!(yes, signatures.find_ed25519(&[21; 32], &[22; 64], b"bar"));
+    assert_eq!(yes, signatures.find(MAGIC, &[11; 32], &[12; 64], b"FOO"));
+    assert_eq!(yes, signatures.find(MAGIC, &[21; 32], &[22; 64], b"bar"));
 
     signatures.write_signature(1, &sig3, || panic!()).unwrap();
-    assert_eq!(yes, signatures.find_ed25519(&[11; 32], &[12; 64], b"foo"));
-    assert_eq!(nah, signatures.find_ed25519(&[21; 32], &[22; 64], b"bar"));
-    assert_eq!(yes, signatures.find_ed25519(&[31; 32], &[32; 64], b"frd"));
+    assert_eq!(yes, signatures.find(MAGIC, &[11; 32], &[12; 64], b"FOO"));
+    assert_eq!(nah, signatures.find(MAGIC, &[21; 32], &[22; 64], b"bar"));
+    assert_eq!(yes, signatures.find(MAGIC, &[31; 32], &[32; 64], b"qux"));
 
     let mut new_data = [0u8; 108];
     signatures
@@ -287,9 +290,9 @@ fn test_ed25519() {
         })
         .unwrap();
     signatures.write_count_and_sort(None, 3).unwrap();
-    assert_eq!(yes, signatures.find_ed25519(&[11; 32], &[12; 64], b"foo"));
-    assert_eq!(yes, signatures.find_ed25519(&[21; 32], &[22; 64], b"bar"));
-    assert_eq!(yes, signatures.find_ed25519(&[31; 32], &[32; 64], b"frd"));
+    assert_eq!(yes, signatures.find(MAGIC, &[11; 32], &[12; 64], b"FOO"));
+    assert_eq!(yes, signatures.find(MAGIC, &[21; 32], &[22; 64], b"bar"));
+    assert_eq!(yes, signatures.find(MAGIC, &[31; 32], &[32; 64], b"qux"));
 
     assert_eq!(Ok(3), signatures.read_count(None));
     assert_eq!(Ok(3), signatures.read_count(Some(0)));
