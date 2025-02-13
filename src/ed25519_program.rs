@@ -6,6 +6,9 @@ use solana_program::instruction::Instruction;
 
 use crate::stdx;
 
+/// Offsets used in instruction data of signature verification native programs.
+///
+/// All `u16` values are stored as little-endian.
 // Copied from but we’re using
 // https://github.com/solana-labs/solana/blob/master/sdk/src/ed25519_instruction.rs
 #[derive(Copy, Clone, bytemuck::Zeroable, bytemuck::Pod)]
@@ -13,10 +16,10 @@ use crate::stdx;
 pub struct SignatureOffsets {
     pub signature_offset: u16, // offset to ed25519 signature of 64 bytes
     pub signature_instruction_index: u16, // instruction index to find signature
-    pub public_key_offset: u16, // offset to public key of 32 bytes
-    pub public_key_instruction_index: u16, // instruction index to find public key
-    pub message_data_offset: u16,          // offset to start of message data
-    pub message_data_size: u16,            // size of message data
+    pub pubkey_offset: u16,    // offset to public key of 32 bytes
+    pub pubkey_instruction_index: u16, // instruction index to find public key
+    pub message_offset: u16,   // offset to start of message data
+    pub message_size: u16,     // size of message data
     pub message_instruction_index: u16, // index of instruction data to get message data
 }
 
@@ -113,7 +116,7 @@ fn write_instruction_data(
         let pos = entries[..idx]
             .iter()
             .position(|ent| ent.message.starts_with(message));
-        let message_data_offset = if let Some(pos) = pos {
+        let message_offset = if let Some(pos) = pos {
             let offsets = &entries_dst[pos];
             // SAFETY: All offsets prior to idx have been initialised.
             u16::from_le_bytes(unsafe {
@@ -128,7 +131,7 @@ fn write_instruction_data(
 
         // Append pubkey, but deduplicate if the key has already been used.
         let pos = entries[..idx].iter().position(|ent| ent.pubkey == pubkey);
-        let public_key_offset = if let Some(pos) = pos {
+        let pubkey_offset = if let Some(pos) = pos {
             let offsets = &entries_dst[pos];
             // SAFETY: All offsets prior to idx have been initialised.
             u16::from_le_bytes(unsafe {
@@ -142,10 +145,10 @@ fn write_instruction_data(
         let offsets = SignatureOffsets {
             signature_offset: u16::from_le(signature_offset),
             signature_instruction_index: u16::MAX,
-            public_key_offset: u16::from_le(public_key_offset),
-            public_key_instruction_index: u16::MAX,
-            message_data_offset: u16::from_le(message_data_offset),
-            message_data_size: message.len() as u16,
+            pubkey_offset: u16::from_le(pubkey_offset),
+            pubkey_instruction_index: u16::MAX,
+            message_offset: u16::from_le(message_offset),
+            message_size: message.len() as u16,
             message_instruction_index: u16::MAX,
         };
         stdx::write_slice(&mut entries_dst[idx], bytemuck::bytes_of(&offsets));
@@ -243,15 +246,11 @@ type Item<'a> = Result<Entry<'a>, Error>;
 fn decode_entry<'a>(data: &'a [u8], entry: &'a [u8; 14]) -> Item<'a> {
     let entry: &[[u8; 2]; 7] = bytemuck::must_cast_ref(entry);
     let entry = entry.map(u16::from_le_bytes);
-    // See SignatureOffsets struct defined in
-    // https://github.com/solana-labs/solana/blob/master/sdk/src/ed25519_instruction.rs
-    // We're simply decomposing it as a [u16; 7] rather than defining the struct.
-    let [sig_offset, sig_ix_idx, key_offset, key_ix_idx, msg_offset, msg_size, msg_ix_idx] =
-        entry;
+    let entry: SignatureOffsets = bytemuck::must_cast(entry);
 
-    if sig_ix_idx != u16::MAX ||
-        key_ix_idx != u16::MAX ||
-        msg_ix_idx != u16::MAX
+    if entry.signature_instruction_index != u16::MAX ||
+        entry.pubkey_instruction_index != u16::MAX ||
+        entry.message_instruction_index != u16::MAX
     {
         return Err(Error::UnsupportedFeature);
     }
@@ -261,19 +260,14 @@ fn decode_entry<'a>(data: &'a [u8], entry: &'a [u8; 14]) -> Item<'a> {
     }
 
     (|| {
-        let sig = get_array::<64>(data, sig_offset)?;
-        let key = get_array::<32>(data, key_offset)?;
-        let msg = data
-            .get(usize::from(msg_offset)..)?
-            .get(..usize::from(msg_size))?;
-        Some((sig, key, msg))
+        let signature = get_array::<64>(data, entry.signature_offset)?;
+        let pubkey = get_array::<32>(data, entry.pubkey_offset)?;
+        let message = data
+            .get(usize::from(entry.message_offset)..)?
+            .get(..usize::from(entry.message_size))?;
+        Some(Entry { signature, pubkey, message })
     })()
     .ok_or(Error::BadData)
-    .map(|(signature, pubkey, message)| Entry {
-        signature,
-        pubkey,
-        message,
-    })
 }
 
 impl<'a> core::iter::Iterator for Iter<'a> {
