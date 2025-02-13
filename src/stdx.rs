@@ -9,6 +9,20 @@
 use core::mem::MaybeUninit;
 
 
+/// Splits `&[u8; L + R]` into `(&[u8; L], &[u8; R])`.
+pub(crate) fn split_array_ref<
+    const L: usize,
+    const R: usize,
+    const N: usize,
+>(
+    xs: &[u8; N],
+) -> (&[u8; L], &[u8; R]) {
+    let () = AssertEqSum::<L, R, N>::OK;
+
+    let (left, right) = xs.split_at(L);
+    (left.try_into().unwrap(), right.try_into().unwrap())
+}
+
 /// Splits `&mut [u8; L + R]` into `(&mut [u8; L], &mut [u8; R])`.
 pub(crate) fn split_array_mut<
     const L: usize,

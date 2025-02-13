@@ -51,12 +51,8 @@ impl SignatureHash {
         signature: &[u8; 64],
         message: &[u8],
     ) -> Self {
-        let mut prelude = [0; 16];
-        let (head, tail) = stdx::split_array_mut::<8, 8, 16>(&mut prelude);
-        *head = magic;
-        *tail = u64::try_from(message.len()).unwrap().to_le_bytes();
         let hash = solana_program::hash::hashv(&[
-            &prelude[..],
+            &magic[..],
             &key[..],
             &signature[..],
             message,
@@ -78,6 +74,37 @@ impl<'a> From<&crate::ed25519_program::Entry<'a>> for SignatureHash {
         Self::new_ed25519(entry.pubkey, entry.signature, entry.message)
     }
 }
+
+
+/// Header of the signatures account.
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct Header {
+    epoch_le: [u8; 8],
+    count_le: [u8; 4],
+}
+
+impl Header {
+    fn count(&self) -> u32 { u32::from_le_bytes(self.count_le) }
+
+    #[cfg(any(test, not(feature = "library")))]
+    fn get_count(&self, want_epoch: Option<u64>) -> u32 {
+        match want_epoch {
+            Some(want) if want != u64::from_le_bytes(self.epoch_le) => 0,
+            _ => self.count(),
+        }
+    }
+
+    #[cfg(any(test, not(feature = "library")))]
+    fn set(&mut self, epoch: Option<u64>, count: u32) {
+        if let Some(epoch) = epoch {
+            self.epoch_le = epoch.to_le_bytes();
+        }
+        self.count_le = count.to_le_bytes();
+    }
+}
+
+const HEAD_SIZE: usize = core::mem::size_of::<Header>();
 
 
 /// Wrapper around signatures account created by the verifier program.
@@ -115,26 +142,33 @@ impl<'a, 'info> SignaturesAccount<'a, 'info> {
     }
 
     /// Reads number of signatures saved in the account.
+    ///
+    /// If `want_epoch` is `Some` and epoch stored in the account doesn’t match
+    /// the one given, returns zero.
     #[cfg(any(test, not(feature = "library")))]
-    pub(crate) fn read_count(&self) -> Result<u32> {
+    pub(crate) fn read_count(&self, want_epoch: Option<u64>) -> Result<u32> {
         let data = self.0.try_borrow_data()?;
-        let (head, _) = stdx::split_at::<4, u8>(&data)
+        let (head, _) = stdx::split_at::<{ HEAD_SIZE }, u8>(&data)
             .ok_or(ProgramError::AccountDataTooSmall)?;
-        Ok(u32::from_le_bytes(*head))
+        Ok(bytemuck::must_cast_ref::<_, Header>(head).get_count(want_epoch))
     }
 
     /// Sets number of signatures saved in the account and sort the entries.
     #[cfg(any(test, not(feature = "library")))]
-    pub(crate) fn write_count_and_sort(&self, count: u32) -> Result {
+    pub(crate) fn write_count_and_sort(
+        &self,
+        epoch: Option<u64>,
+        count: u32,
+    ) -> Result {
         let mut data = self.0.try_borrow_mut_data()?;
-        let (head, tail) = stdx::split_at_mut::<4, _>(*data)
+        let (head, tail) = stdx::split_at_mut::<{ HEAD_SIZE }, _>(*data)
             .ok_or(ProgramError::AccountDataTooSmall)?;
-        let entries = stdx::as_chunks_mut::<{ SignatureHash::SIZE }, _>(tail)
+        stdx::as_chunks_mut::<{ SignatureHash::SIZE }, _>(tail)
             .0
             .get_mut(..usize::try_from(count).unwrap())
-            .ok_or(ProgramError::AccountDataTooSmall)?;
-        *head = count.to_le_bytes();
-        entries.sort_unstable();
+            .ok_or(ProgramError::AccountDataTooSmall)?
+            .sort_unstable();
+        bytemuck::must_cast_mut::<_, Header>(head).set(epoch, count);
         Ok(())
     }
 
@@ -153,7 +187,7 @@ impl<'a, 'info> SignaturesAccount<'a, 'info> {
             let start = usize::try_from(index)
                 .ok()?
                 .checked_mul(core::mem::size_of_val(signature))?
-                .checked_add(core::mem::size_of_val(&index))?;
+                .checked_add(HEAD_SIZE)?;
             let end = start.checked_add(core::mem::size_of_val(signature))?;
             Some(start..end)
         })()
@@ -180,9 +214,11 @@ pub(crate) fn find_sighash(
     data: &[u8],
     signature: SignatureHash,
 ) -> Result<bool> {
-    let (head, tail) = stdx::split_at::<4, _>(data)
+    let (head, tail) = stdx::split_at::<{ HEAD_SIZE }, _>(data)
         .ok_or(ProgramError::AccountDataTooSmall)?;
-    let count = usize::try_from(u32::from_le_bytes(*head))
+    let count = bytemuck::must_cast_ref::<_, Header>(head)
+        .count()
+        .try_into()
         .map_err(|_| ProgramError::InvalidAccountData)?;
     let entries = stdx::as_chunks::<{ SignatureHash::SIZE }, _>(tail)
         .0
@@ -196,11 +232,14 @@ pub(crate) fn find_sighash(
 fn test_ed25519() {
     let sig1 = SignatureHash::new_ed25519(&[11; 32], &[12; 64], b"foo");
     let sig2 = SignatureHash::new_ed25519(&[21; 32], &[22; 64], b"bar");
-    let sig3 = SignatureHash::new_ed25519(&[31; 32], &[32; 64], b"baz");
+    let sig3 = SignatureHash::new_ed25519(&[31; 32], &[32; 64], b"frd");
 
-    let mut data = [0; 68];
-    data[4..36].copy_from_slice(&sig1.0);
-    data[36..].copy_from_slice(&sig2.0);
+    assert!(sig1.0 < sig2.0);
+    assert!(sig2.0 < sig3.0);
+
+    let mut data = [0; 76];
+    data[12..44].copy_from_slice(&sig1.0);
+    data[44..].copy_from_slice(&sig2.0);
 
     let key = Pubkey::new_unique();
     let owner = Pubkey::new_unique();
@@ -222,27 +261,26 @@ fn test_ed25519() {
     let yes = Ok(true);
     let nah = Ok(false);
 
-    assert_eq!(Ok(0), signatures.read_count());
-
+    assert_eq!(Ok(0), signatures.read_count(None));
     assert_eq!(nah, signatures.find_ed25519(&[11; 32], &[12; 64], b"foo"));
     assert_eq!(nah, signatures.find_ed25519(&[21; 32], &[22; 64], b"bar"));
 
-    signatures.write_count_and_sort(1).unwrap();
-    assert_eq!(Ok(1), signatures.read_count());
+    signatures.write_count_and_sort(None, 1).unwrap();
+    assert_eq!(Ok(1), signatures.read_count(None));
     assert_eq!(yes, signatures.find_ed25519(&[11; 32], &[12; 64], b"foo"));
     assert_eq!(nah, signatures.find_ed25519(&[21; 32], &[22; 64], b"bar"));
 
-    signatures.write_count_and_sort(2).unwrap();
-    assert_eq!(Ok(2), signatures.read_count());
+    signatures.write_count_and_sort(None, 2).unwrap();
+    assert_eq!(Ok(2), signatures.read_count(None));
     assert_eq!(yes, signatures.find_ed25519(&[11; 32], &[12; 64], b"foo"));
     assert_eq!(yes, signatures.find_ed25519(&[21; 32], &[22; 64], b"bar"));
 
     signatures.write_signature(1, &sig3, || panic!()).unwrap();
     assert_eq!(yes, signatures.find_ed25519(&[11; 32], &[12; 64], b"foo"));
     assert_eq!(nah, signatures.find_ed25519(&[21; 32], &[22; 64], b"bar"));
-    assert_eq!(yes, signatures.find_ed25519(&[31; 32], &[32; 64], b"baz"));
+    assert_eq!(yes, signatures.find_ed25519(&[31; 32], &[32; 64], b"frd"));
 
-    let mut new_data = [0u8; 100];
+    let mut new_data = [0u8; 108];
     signatures
         .write_signature(2, &sig2, || {
             let mut data = signatures.try_borrow_mut_data().unwrap();
@@ -251,8 +289,16 @@ fn test_ed25519() {
             Ok(())
         })
         .unwrap();
-    signatures.write_count_and_sort(3).unwrap();
+    signatures.write_count_and_sort(None, 3).unwrap();
     assert_eq!(yes, signatures.find_ed25519(&[11; 32], &[12; 64], b"foo"));
     assert_eq!(yes, signatures.find_ed25519(&[21; 32], &[22; 64], b"bar"));
-    assert_eq!(yes, signatures.find_ed25519(&[31; 32], &[32; 64], b"baz"));
+    assert_eq!(yes, signatures.find_ed25519(&[31; 32], &[32; 64], b"frd"));
+
+    assert_eq!(Ok(3), signatures.read_count(None));
+    assert_eq!(Ok(3), signatures.read_count(Some(0)));
+    assert_eq!(Ok(0), signatures.read_count(Some(1)));
+    signatures.write_count_and_sort(Some(2), 3).unwrap();
+    assert_eq!(Ok(3), signatures.read_count(None));
+    assert_eq!(Ok(0), signatures.read_count(Some(0)));
+    assert_eq!(Ok(3), signatures.read_count(Some(2)));
 }

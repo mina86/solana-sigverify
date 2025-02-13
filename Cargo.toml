@@ -14,7 +14,7 @@ crate-type = ["cdylib", "lib"]
 library = []
 
 [dependencies]
-bytemuck = { version = "1.21", features = ["must_cast"] }
+bytemuck = { version = "1.21", features = ["derive", "must_cast"] }
 derive_more = { version = "1", features = ["as_ref", "deref", "deref_mut", "from", "into"] }
 solana-program = "1.18.26"
 

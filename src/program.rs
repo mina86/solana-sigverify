@@ -33,7 +33,7 @@ solana_program::entrypoint!(process_instruction);
 ///     seed_len: u8,  // at most 31
 ///     seed: [u8; seed_len],
 ///     bump: u8,
-///     truncate_length: Option<u32>,
+///     epoch: Option<u64>,
 /// }
 /// ```
 ///
@@ -57,6 +57,11 @@ solana_program::entrypoint!(process_instruction);
 /// The Signatures account must be a PDA with seeds `[payer.key, seed,
 /// &[bump]]`.  If the Signatures account doesn’t exist, creates the account.
 /// Similarly, if it’s too small, increases its size.
+///
+/// If `epoch` is given, the value is compared with epoch stored in the PDA.  If
+/// they differ, the PDA will be cleared first from any stored signatures.  The
+/// epoch allows reusing the same PDA without the need to synchronously clear
+/// it.
 ///
 /// # Free
 ///
@@ -102,20 +107,19 @@ fn handle_update(
     accounts: &[AccountInfo],
     instruction: &[u8],
 ) -> Result {
-    // Read `truncate` from instruction data.  If given, discard any signatures
-    // stored in the Signatures account past given number.  The number may be larger
-    // than the available count.
-    let truncate = if instruction.is_empty() {
-        u32::MAX
+    // Read `epoch` from instruction data.  If given, remove all the signatures
+    // if the epoch doesn’t match one stored in the account.
+    let epoch = if instruction.is_empty() {
+        None
     } else if let Ok(truncate) = instruction.try_into() {
-        u32::from_le_bytes(truncate)
+        Some(u64::from_le_bytes(truncate))
     } else {
         return Err(ProgramError::InvalidInstructionData);
     };
 
     // Initialise the Signatures account and read number of signatures stored there.
     ctx.initialise_signatures_account()?;
-    let mut count = ctx.signatures.read_count()?.min(truncate);
+    let mut count = ctx.signatures.read_count(epoch)?;
 
     // Get the previous instruction.  We expect it to be a call to Ed25519
     // native program.
@@ -135,7 +139,7 @@ fn handle_update(
 
     // Update number of signatures saved in the Signatures account and sort
     // the entries.
-    ctx.signatures.write_count_and_sort(count)
+    ctx.signatures.write_count_and_sort(epoch, count)
 }
 
 
