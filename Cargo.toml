@@ -1,4 +1,5 @@
 # Copyright 2024 by Composable Foundation
+# Copyright 2025 by Michał Nazarewicz <mina86@mina86.com>
 
 [package]
 name = "solana-sigverify"
