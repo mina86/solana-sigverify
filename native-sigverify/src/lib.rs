@@ -1,20 +1,33 @@
-//! Utilities for parsing Ed25519 native program instruction data.
-
-use core::mem::MaybeUninit;
+//! Utilities for creating and parsing native signature verification program
+//! instruction data.
+//!
+//! Solana runtime provides native programs for performing signature
+//! verification (henceforth referred to as native signature verification
+//! programs).  Unfortunately, interface for interfacing with those programs is
+//! rather lacking.
+//!
+//! This crate offers functions for creating instruction calling the native
+//! signature verification programs as well as parsing their instruction data.
 
 use solana_program::instruction::Instruction;
 use solana_program::pubkey::Pubkey;
 
-use crate::{algo, stdx};
+mod stdx;
 
-/// Offsets used in instruction data of signature verification native programs.
+
+/// Offsets used in instruction data of native signature verification programs.
 ///
-/// All `u16` values are stored as little-endian.
+/// This is a low-level structure.  Typically you’d want to use higher level
+/// interface: [`new_instruction`] for creating instruction calling the native
+/// signature verification program or [`parse_data`] for parsing its instruction
+/// data.
+///
+/// All integers are stored as little-endian.
 // Copied from but we’re using
 // https://github.com/solana-labs/solana/blob/master/sdk/src/ed25519_instruction.rs
 #[derive(Copy, Clone, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
-struct SignatureOffsets {
+pub struct SignatureOffsets {
     pub signature_offset: u16, // offset to ed25519 signature of 64 bytes
     pub signature_instruction_index: u16, // instruction index to find signature
     pub pubkey_offset: u16,    // offset to public key of 32 bytes
@@ -37,37 +50,54 @@ pub struct Entry<'a> {
 
 
 /// Address of the Ed25519 native program.
-pub const ED25519_ID: Pubkey = algo::Ed25519::ID;
+pub const ED25519_PROGRAM_ID: Pubkey = solana_program::ed25519_program::ID;
 /// Address of the Secp255k1 native program.
-pub const SECP256K1_ID: Pubkey = algo::Secp256k1::ID;
+pub const SECP256K1_PROGRAM_ID: Pubkey = solana_program::secp256k1_program::ID;
 /// Address of the Secp255r1 native program.
-pub const SECP256R1_ID: Pubkey = algo::Secp256r1::ID;
+// This isn’t defined in solana-program 1.18 but Anza docs lists it, see
+// <https://docs.anza.xyz/runtime/programs#secp256r1-program>.
+pub const SECP256R1_PROGRAM_ID: Pubkey =
+    solana_program::pubkey!("Secp256r1SigVerify1111111111111111111111111");
 
 
-/// Creates an instruction calling a native signature verification program which
-/// verifies specified signatures.
+/// Creates an instruction calling a native signature verification program.
 ///
 /// `program_id` specifies the address of the signature verification program and
-/// typically is one of [`ED25519_ID`], [`SECP256K1_ID`] or [`SECP256R1_ID`].
-/// The function can be used for other signature verification programs so long
-/// as they use the same calling convention.
+/// typically is one of [`ED25519_PROGRAM_ID`], [`SECP256K1_PROGRAM_ID`] or
+/// [`SECP256R1_PROGRAM_ID`].  The function can be used for other signature
+/// verification programs so long as they use the same calling convention.
 ///
-/// Returns `None` if there are more than 255 entries or message length of any
-/// entry is longer than 65535 bytes.  Note that instruction with more than
-/// roughly ten signatures or message larger than about a kilobyte cannot be
-/// executed anyway due to Solana’s transaction size limit of 1232 bytes.
-///
-/// Note: If multiple entries are signatures for the same message, that message
-/// will be included in the instruction data only once.  Furthermore, this
-/// function will try to do the same deduplication to prefixes of messages but
-/// for that to work entry for the longer message must come first.
-///
-/// Similarly, if multiple entries use the same public key, the public key will
-/// be included in the instruction only once.
+/// See [`new_instruction_data`] for possible error conditions and notes about
+/// space optimisation.
 pub fn new_instruction(
     program_id: Pubkey,
     entries: &[Entry],
 ) -> Option<Instruction> {
+    let data = new_instruction_data(entries)?;
+    Some(Instruction { program_id, accounts: Vec::new(), data })
+}
+
+
+/// Creates instruction data for a call of a native signature verification
+/// program.
+///
+/// Returns `None` if there are more than 255 entries or message length of any
+/// entry is longer than 65535 bytes.  However, observe that Solana upper limit
+/// for instruction data is about 1100 (lower in practice).  This function does
+/// not check this size limit and may return instruction data which don’t fit in
+/// a Solana transaction.
+///
+/// Tries to conserve space by reusing messages and public keys if possible.  In
+/// current implementation this is done in two ways.  Firstly, if the same
+/// public key is used for multiple signatures, that public key is included in
+/// instruction data only once.  Secondly, if a later message is a prefix of an
+/// earlier one, the message isn’t included for the second time.
+///
+/// The second optimisation doesn’t work if signature for a prefix is earlier in
+/// the `entries` than the full message.  Depending on the nature of the
+/// entries, it may be useful to sort them by the message length (starting from
+/// the longest message) to maximise space optimisation potential.
+pub fn new_instruction_data(entries: &[Entry]) -> Option<Vec<u8>> {
     u8::try_from(entries.len()).ok()?;
 
     // Calculate the length of the instruction.  If we manage to deduplicate
@@ -85,18 +115,11 @@ pub fn new_instruction(
     // have been initialised.
     unsafe { data.set_len(len) };
 
-    Some(Instruction { program_id, accounts: Vec::new(), data })
+    Some(data)
 }
 
-/// Writes a native signature verification program instruction data to given
-/// buffer.
-///
-/// Assumes that `entries.len() < 256`, `dst.len() ≤ u16::MAX` and `dst` can fit
-/// all the data.  Returns length of the instruction (which is guaranteed to be
-/// no greater than `dst.len()`).  All data in `dst` up to returned index is
-/// initialised.
 fn write_instruction_data(
-    dst: &mut [MaybeUninit<u8>],
+    dst: &mut [core::mem::MaybeUninit<u8>],
     entries: &[Entry],
 ) -> usize {
     // The structure of the instruction data is:
@@ -216,75 +239,8 @@ pub struct Iter<'a> {
     data: &'a [u8],
 }
 
-
-/// Error when parsing a signature.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Error {
-    /// Signature entry references data from other instructions which is
-    /// currently unsupported.
-    UnsupportedFeature,
-
-    /// Signature entry is malformed.
-    ///
-    /// Such entries should cause the native signature verification program
-    /// instruction to fail so this should never happen when parsing past
-    /// instructions of current transaction.
-    BadData,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct BadData;
-
-impl From<BadData> for Error {
-    fn from(_: BadData) -> Self { Self::BadData }
-}
-
-impl From<BadData> for solana_program::program_error::ProgramError {
-    fn from(_: BadData) -> Self { Self::InvalidInstructionData }
-}
-
-impl From<Error> for solana_program::program_error::ProgramError {
-    fn from(_: Error) -> Self { Self::InvalidInstructionData }
-}
-
-/// An item returned by th
-type Item<'a> = Result<Entry<'a>, Error>;
-
-
-/// Decodes signature entry from the instruction data.
-///
-/// `data` is the entire instruction data for the native signature verification
-/// program call and `entry` is one of the signature offsets entry from that
-/// instruction data.
-fn decode_entry<'a>(data: &'a [u8], entry: &'a [u8; 14]) -> Item<'a> {
-    let entry: &[[u8; 2]; 7] = bytemuck::must_cast_ref(entry);
-    let entry = entry.map(u16::from_le_bytes);
-    let entry: SignatureOffsets = bytemuck::must_cast(entry);
-
-    if entry.signature_instruction_index != u16::MAX ||
-        entry.pubkey_instruction_index != u16::MAX ||
-        entry.message_instruction_index != u16::MAX
-    {
-        return Err(Error::UnsupportedFeature);
-    }
-
-    fn get_array<const N: usize>(data: &[u8], offset: u16) -> Option<&[u8; N]> {
-        Some(stdx::split_at::<N, u8>(data.get(usize::from(offset)..)?)?.0)
-    }
-
-    (|| {
-        let signature = get_array::<64>(data, entry.signature_offset)?;
-        let pubkey = get_array::<32>(data, entry.pubkey_offset)?;
-        let message = data
-            .get(usize::from(entry.message_offset)..)?
-            .get(..usize::from(entry.message_size))?;
-        Some(Entry { signature, pubkey, message })
-    })()
-    .ok_or(Error::BadData)
-}
-
 impl<'a> core::iter::Iterator for Iter<'a> {
-    type Item = Item<'a>;
+    type Item = Result<Entry<'a>, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let entry = self.entries.next()?;
@@ -322,9 +278,75 @@ impl core::iter::DoubleEndedIterator for Iter<'_> {
 }
 
 
+/// Error when parsing a signature.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Error {
+    /// Signature entry references data from other instructions which is
+    /// currently unsupported.
+    UnsupportedFeature,
+
+    /// Signature entry is malformed.
+    ///
+    /// Such entries should cause the native signature verification program
+    /// instruction to fail so this should never happen when parsing past
+    /// instructions of current transaction.
+    BadData,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BadData;
+
+impl From<BadData> for Error {
+    fn from(_: BadData) -> Self { Self::BadData }
+}
+
+impl From<BadData> for solana_program::program_error::ProgramError {
+    fn from(_: BadData) -> Self { Self::InvalidInstructionData }
+}
+
+impl From<Error> for solana_program::program_error::ProgramError {
+    fn from(_: Error) -> Self { Self::InvalidInstructionData }
+}
+
+
+/// Decodes signature entry from the instruction data.
+///
+/// `data` is the entire instruction data for the native signature verification
+/// program call and `entry` is one of the signature offsets entry from that
+/// instruction data.
+fn decode_entry<'a>(
+    data: &'a [u8],
+    entry: &'a [u8; 14],
+) -> Result<Entry<'a>, Error> {
+    let entry: &[[u8; 2]; 7] = bytemuck::must_cast_ref(entry);
+    let entry = entry.map(u16::from_le_bytes);
+    let entry: SignatureOffsets = bytemuck::must_cast(entry);
+
+    if entry.signature_instruction_index != u16::MAX ||
+        entry.pubkey_instruction_index != u16::MAX ||
+        entry.message_instruction_index != u16::MAX
+    {
+        return Err(Error::UnsupportedFeature);
+    }
+
+    fn get_array<const N: usize>(data: &[u8], offset: u16) -> Option<&[u8; N]> {
+        Some(stdx::split_at::<N, u8>(data.get(usize::from(offset)..)?)?.0)
+    }
+
+    (|| {
+        let signature = get_array::<64>(data, entry.signature_offset)?;
+        let pubkey = get_array::<32>(data, entry.pubkey_offset)?;
+        let message = data
+            .get(usize::from(entry.message_offset)..)?
+            .get(..usize::from(entry.message_size))?;
+        Some(Entry { signature, pubkey, message })
+    })()
+    .ok_or(Error::BadData)
+}
+
+
 #[cfg(test)]
 mod test {
-    use algo::Algorithm;
     use ed25519_dalek::{Keypair, Signer};
     use solana_sdk::ed25519_instruction::new_ed25519_instruction;
 
@@ -355,8 +377,7 @@ mod test {
                 fn test_iter_new_instruction() {
                     let $ctx = $prepare;
                     let entries = [$($entry),*];
-                    let data =
-                        algo::Ed25519::new_instruction(&entries).unwrap().data;
+                    let data = new_instruction_data(&entries).unwrap();
 
                     let mut iter = parse_data(data.as_slice()).unwrap();
                     for want in entries {
@@ -369,8 +390,7 @@ mod test {
                 fn test_verify_new_instruction() {
                     let $ctx = $prepare;
                     let entries = [$($entry),*];
-                    let mut data =
-                        algo::Ed25519::new_instruction(&entries).unwrap().data;
+                    let mut data = new_instruction_data(&entries).unwrap();
 
                     // solana_sdk::ed25519_instruction::verify requires data to
                     // be aligned to two bytes.  data is Vec<u8> so we can’t
@@ -396,8 +416,7 @@ mod test {
                 fn test_new_instruction_snapshot() {
                     let $ctx = $prepare;
                     let entries = [$($entry),*];
-                    let data =
-                        algo::Ed25519::new_instruction(&entries).unwrap().data;
+                    let data = new_instruction_data(&entries).unwrap();
                     insta::assert_debug_snapshot!(data.as_slice());
                 }
             }

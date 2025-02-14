@@ -1,0 +1,27 @@
+# Copyright 2024 by Composable Foundation
+# Copyright 2025 by Michał Nazarewicz <mina86@mina86.com>
+
+[package]
+name = "solana-sigverify"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+client = []
+lib = []
+
+[dependencies]
+bytemuck = { workspace = true, features = ["derive", "must_cast"] }
+derive_more = { workspace = true, features = ["as_ref", "deref", "deref_mut", "from", "into"] }
+solana-program = "1.18.26"
+
+solana-native-sigverify.workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace=true
+insta.workspace=true
+solana-sdk.workspace=true

@@ -154,13 +154,13 @@ fn process_verify_instruction(
     instruction: Instruction,
     mut callback: impl FnMut(SigHash) -> Result,
 ) -> Result {
-    use crate::verify_program::Error;
+    use solana_native_sigverify::Error;
 
     let magic = match crate::algo::from_id(instruction.program_id) {
         Some(magic) => magic,
         None => return Ok(()),
     };
-    crate::verify_program::parse_data(instruction.data.as_slice())?
+    solana_native_sigverify::parse_data(instruction.data.as_slice())?
         .try_for_each(|entry| match entry {
             Ok(entry) => callback(SigHash::from_entry(magic, entry)),
             Err(Error::UnsupportedFeature) => Ok(()),

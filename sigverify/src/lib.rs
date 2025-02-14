@@ -9,7 +9,6 @@ mod program;
 mod stdx;
 #[cfg(feature = "lib")]
 mod verifier;
-pub mod verify_program;
 
 pub use api::{SigHash, SignaturesAccount};
 #[cfg(feature = "lib")]

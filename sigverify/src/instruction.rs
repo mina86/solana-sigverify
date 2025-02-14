@@ -11,7 +11,7 @@ type Result<T = (), E = ProgramError> = core::result::Result<T, E>;
 ///
 /// For the instruction to work, it must be executed in a transaction with call
 /// to native signature verification program *directly* preceding it.  To create
-/// such instruction use [`crate::verify_program::new_instruction`].
+/// such instruction use [`solana_native_sigverify::new_instruction`].
 ///
 /// Together with the instruction, returns the signatures account address and
 /// bump.  The account is where the program will collect all the signatures.
@@ -68,7 +68,7 @@ pub fn update(
 pub struct UpdateIter<'a> {
     native_program: &'a Pubkey,
     sigverify_instruction: Instruction,
-    entries: &'a [crate::verify_program::Entry<'a>],
+    entries: &'a [solana_native_sigverify::Entry<'a>],
     seed_len: u8,
     max_data_size: NonZeroU16,
 }
@@ -80,7 +80,7 @@ impl<'a> UpdateIter<'a> {
         payer: Pubkey,
         seed: &[u8],
         epoch: Option<u64>,
-        entries: &'a [crate::verify_program::Entry],
+        entries: &'a [solana_native_sigverify::Entry],
     ) -> Result<(Self, Pubkey, u8)> {
         let seed_len = check_seed(seed)?;
         let (sigverify_instruction, account, bump) =
@@ -144,7 +144,7 @@ impl core::iter::Iterator for UpdateIter<'_> {
             .count();
         let count = count.max(1);
 
-        let native_instruction = crate::verify_program::new_instruction(
+        let native_instruction = solana_native_sigverify::new_instruction(
             *self.native_program,
             &self.entries[..count],
         )

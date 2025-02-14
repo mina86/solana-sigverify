@@ -1,10 +1,10 @@
+use solana_native_sigverify::Entry;
 use solana_program::account_info::AccountInfo;
 use solana_program::program_error::ProgramError;
 use solana_program::pubkey::Pubkey;
 use solana_program::sysvar::instructions::get_instruction_relative;
 
-use crate::verify_program::Entry;
-use crate::{algo, verify_program};
+use crate::algo;
 
 type AccountData<'a> = alloc::rc::Rc<core::cell::RefCell<&'a mut [u8]>>;
 type Result<T = (), E = ProgramError> = core::result::Result<T, E>;
@@ -148,11 +148,11 @@ impl<'info, Algo: algo::Algorithm> Verifier<'info, Algo> {
 
 /// Checks that given signature exists in given native program call instruction.
 fn check_native_data(data: &[u8], entry: &Entry) -> Result<bool, Error> {
-    for item in verify_program::parse_data(data)? {
+    for item in solana_native_sigverify::parse_data(data)? {
         match item.map(|item| item == *entry) {
             Ok(true) => return Ok(true),
             Ok(false) => (),
-            Err(verify_program::Error::UnsupportedFeature) => (),
+            Err(solana_native_sigverify::Error::UnsupportedFeature) => (),
             Err(_) => return Err(Error::BadData),
         }
     }
@@ -170,8 +170,8 @@ fn check_sigverify_data(
         .map_err(|_| Error::BadData)
 }
 
-impl From<verify_program::BadData> for Error {
-    fn from(_: verify_program::BadData) -> Self { Self::BadData }
+impl From<solana_native_sigverify::BadData> for Error {
+    fn from(_: solana_native_sigverify::BadData) -> Self { Self::BadData }
 }
 
 impl From<Error> for ProgramError {

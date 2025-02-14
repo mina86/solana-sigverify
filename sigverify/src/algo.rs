@@ -2,7 +2,7 @@ use core::num::NonZeroU32;
 
 use solana_program::pubkey::Pubkey;
 
-use crate::{verify_program, SigHash};
+use crate::SigHash;
 
 
 /// An opaque magic token used to identify different signature types.
@@ -36,23 +36,23 @@ pub trait Algorithm {
     }
 
     /// Calculates a [`SigHash`] for signature of this algorithm.
-    fn sighash_entry(entry: verify_program::Entry) -> SigHash {
+    fn sighash_entry(entry: solana_native_sigverify::Entry) -> SigHash {
         SigHash::from_entry(Self::magic(), entry)
     }
 
     /// Creates an instruction calling a native signature verification program.
     ///
-    /// This is a wrapper around [`verify_program::new_instruction`].
+    /// This is a wrapper around [`solana_native_sigverify::new_instruction`].
     fn new_instruction(
-        entries: &[verify_program::Entry],
+        entries: &[solana_native_sigverify::Entry],
     ) -> Option<solana_program::instruction::Instruction> {
-        verify_program::new_instruction(Self::program_id(), entries)
+        solana_native_sigverify::new_instruction(Self::program_id(), entries)
     }
 }
 
 
 macro_rules! define {
-    ($($name:ident, $magic:expr, $id:expr;)*) => {
+    ($($name:ident, $magic:expr, $id:ident;)*) => {
         $(
             #[doc = concat!("Specification for the ", stringify!($name), " algorithm.")]
             pub struct $name;
@@ -65,7 +65,7 @@ macro_rules! define {
                 };
 
                 /// Address of the native program verifying signatures of this type.
-                pub const ID: Pubkey = $id;
+                pub const ID: Pubkey = solana_native_sigverify::$id;
             }
 
             impl Algorithm for $name {
@@ -91,6 +91,15 @@ macro_rules! define {
         ///
         /// Returns a magic token used in [`SigHash`] or `None` if the algorithm
         /// cannot be identified.
+        ///
+        /// # Example
+        ///
+        /// ```
+        /// use solana_sigverify::algo;
+        ///
+        /// assert_eq!(Some(algo::Ed25519::MAGIC),
+        ///            algo::from_id(algo::Ed25519::ID));
+        /// ```
         pub fn from_id(id: Pubkey) -> Option<Magic> {
             $(
                 if $name::ID == id {
@@ -108,20 +117,13 @@ macro_rules! define {
     }
 }
 
-/// Address of the Secp256r1 Program.
-///
-/// This is not included in solana-program but is listed in documentation at
-/// <https://docs.anza.xyz/runtime/programs#secp256r1-program>.
-const SECP256R1_PROGRAM_ID: Pubkey =
-    solana_program::pubkey!("Secp256r1SigVerify1111111111111111111111111");
-
 define! {
-    Ed25519, b"ed\xff\x13", solana_program::ed25519_program::ID;
+    Ed25519, b"ed\xff\x13", ED25519_PROGRAM_ID;
 
     // See https://www.secg.org/sec2-v2.pdf for different sec algorithms.  The
     // magic format chosen is 's', followed by number in the algorithm mod 256
     // and then 'k#' or 'r#'.  Most of the algorithms won’t be supported by
     // Solana but this scheme allows for all of them to be used.
-    Secp256k1, b"s\x00k1", solana_program::secp256k1_program::ID;
+    Secp256k1, b"s\x00k1", SECP256K1_PROGRAM_ID;
     Secp256r1, b"s\x00r1", SECP256R1_PROGRAM_ID;
 }

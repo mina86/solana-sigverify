@@ -1,0 +1,17 @@
+# Copyright 2024 by Composable Foundation
+# Copyright 2025 by Michał Nazarewicz <mina86@mina86.com>
+
+[package]
+name = "solana-native-sigverify"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bytemuck = { workspace = true, features = ["must_cast"] }
+solana-program.workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+insta.workspace = true
+solana-sdk.workspace = true

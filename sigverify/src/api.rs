@@ -1,8 +1,8 @@
+use solana_native_sigverify::Entry;
 use solana_program::account_info::AccountInfo;
 use solana_program::program_error::ProgramError;
 use solana_program::pubkey::Pubkey;
 
-use crate::verify_program::Entry;
 use crate::{algo, stdx};
 
 type Result<T = (), E = ProgramError> = core::result::Result<T, E>;
