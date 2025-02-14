@@ -1,0 +1,11 @@
+[package]
+name = "sig-data"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+hex-literal = { version = "0.4.1", default-features = false }
+
+[dev-dependencies]
+ed25519-dalek.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "sig-program"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "sigtest"
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+solana-program.workspace = true
+solana-sigverify = { workspace = true, features = ["lib"] }
+
+sig-data.workspace = true

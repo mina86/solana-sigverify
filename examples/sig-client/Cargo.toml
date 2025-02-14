@@ -1,0 +1,16 @@
+[package]
+name = "sig-client"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+derive_more = { workspace = true, features = ["display", "from"] }
+rand = { workspace = true, features = ["thread_rng"] }
+solana-client.workspace = true
+solana-sdk.workspace = true
+solana-transaction-status.workspace = true
+
+sig-data.workspace = true
+solana-native-sigverify = { workspace = true }
+solana-sigverify = { workspace = true, features = ["client"] }
