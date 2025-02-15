@@ -119,10 +119,7 @@ impl<'a> UpdateIter<'a> {
 }
 
 impl core::iter::Iterator for UpdateIter<'_> {
-    type Item = (
-        solana_program::instruction::Instruction,
-        solana_program::instruction::Instruction,
-    );
+    type Item = [solana_program::instruction::Instruction; 2];
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.entries.is_empty() {
@@ -150,7 +147,7 @@ impl core::iter::Iterator for UpdateIter<'_> {
         )
         .unwrap();
         self.entries = &self.entries[count..];
-        Some((native_instruction, self.sigverify_instruction.clone()))
+        Some([native_instruction, self.sigverify_instruction.clone()])
     }
 }
 

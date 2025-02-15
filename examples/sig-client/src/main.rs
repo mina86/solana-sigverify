@@ -96,11 +96,11 @@ fn run() -> Result {
     )?;
 
     eprintln!("Collecting {} signatures", entries.len());
-    for (inst1, inst2) in iter {
-        eprintln!("Sending transaction to {}…", inst2.program_id);
+    for insts in iter {
+        eprintln!("Sending transaction to {}…", insts[1].program_id);
         let blockhash = client.get_latest_blockhash()?;
         let message = Message::new_with_blockhash(
-            &[inst1, inst2],
+            &insts,
             Some(&keypair.pubkey()),
             &blockhash,
         );
