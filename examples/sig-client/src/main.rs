@@ -95,7 +95,7 @@ fn run() -> Result {
         &entries,
     )?;
 
-    eprintln!("Collecting {} signatures", entries.len());
+    eprintln!("Aggregating {} signatures", entries.len());
     for insts in iter {
         eprintln!("Sending transaction to {}…", insts[1].program_id);
         let blockhash = client.get_latest_blockhash()?;
@@ -110,7 +110,7 @@ fn run() -> Result {
 
 
     // Call the test program
-    eprintln!("Calling test program…");
+    eprintln!("Calling sigtest program…");
     call_sigtest_program(&client, &keypair, account)?;
 
 
@@ -145,8 +145,6 @@ fn call_sigtest_program(
     keypair: &Keypair,
     signatures_account: Pubkey,
 ) -> Result {
-    eprintln!("Calling sigtest program…");
-
     // For demonstration, execute sigtest program together with call to Ed25519
     // program to show that solana_sigverify::Verifier is capable of checking
     // signatures from signatures account as well as from the native signature
