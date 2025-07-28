@@ -347,8 +347,8 @@ fn decode_entry<'a>(
 
 #[cfg(test)]
 mod test {
-    use ed25519_dalek::{Keypair, Signer};
-    use solana_sdk::ed25519_instruction::new_ed25519_instruction;
+    use ed25519_dalek::Signer;
+    use solana_ed25519_program::new_ed25519_instruction_with_signature;
 
     use super::*;
 
@@ -404,7 +404,8 @@ mod test {
                     };
 
                     // Verify
-                    solana_sdk::ed25519_instruction::verify(
+                    #[allow(deprecated)]
+                    solana_ed25519_program::verify(
                         data,
                         &[data],
                         &Default::default(),
@@ -423,35 +424,32 @@ mod test {
         }
     }
 
-    const KEYPAIR1: [u8; 64] = [
+    const SECRETKEY1: [u8; 32] = [
         99, 241, 33, 162, 28, 57, 15, 190, 246, 156, 30, 188, 100, 125, 110,
         174, 37, 123, 198, 137, 90, 220, 247, 230, 191, 238, 71, 217, 207, 176,
-        67, 112, 18, 10, 242, 85, 239, 109, 138, 32, 37, 117, 17, 6, 184, 125,
-        216, 16, 222, 201, 241, 41, 225, 95, 171, 115, 85, 114, 249, 152, 205,
-        71, 25, 89,
+        67, 112,
     ];
 
     fn make_signature(
         message: &[u8],
-        keypair: &[u8; 64],
-    ) -> ([u8; 64], [u8; 32], Keypair) {
-        let keypair = ed25519_dalek::Keypair::from_bytes(keypair).unwrap();
-        let signature = keypair.sign(message).to_bytes();
-        let pubkey = keypair.public.to_bytes();
-        (signature, pubkey, keypair)
+        secretkey: &[u8; 32],
+    ) -> ([u8; 64], [u8; 32]) {
+        let secretkey = ed25519_dalek::SigningKey::from_bytes(secretkey);
+        let signature = secretkey.sign(message).to_bytes();
+        (signature, secretkey.verifying_key().to_bytes())
     }
 
     make_test! {
         single_signature;
-        let ctx = make_signature(b"message", &KEYPAIR1);
-        new_ed25519_instruction(&ctx.2, b"message").data;
+        let ctx = make_signature(b"message", &SECRETKEY1);
+        new_ed25519_instruction_with_signature(b"message", &ctx.0, &ctx.1).data;
         Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"message" }
     }
 
     fn prepare_two_signatures_test(
         msg1: &[u8],
         msg2: &[u8],
-        keypair2: &[u8; 64],
+        secretkey2: &[u8; 32],
     ) -> ([u8; 64], [u8; 32], [u8; 64], [u8; 32], Vec<u8>) {
         const SIG_SIZE: u16 = 64;
         const KEY_SIZE: u16 = 32;
@@ -481,8 +479,8 @@ mod test {
             /* msg_ix_idx: */ u16::MAX,
         ];
 
-        let (sig1, pubkey1, _) = make_signature(msg1, &KEYPAIR1);
-        let (sig2, pubkey2, _) = make_signature(msg2, &keypair2);
+        let (sig1, pubkey1) = make_signature(msg1, &SECRETKEY1);
+        let (sig2, pubkey2) = make_signature(msg2, secretkey2);
 
         let data = [
             bytemuck::bytes_of(&header),
@@ -500,7 +498,7 @@ mod test {
 
     make_test! {
         two_signatures;
-        let ctx = prepare_two_signatures_test(b"foo", b"bar", &KEYPAIR1);
+        let ctx = prepare_two_signatures_test(b"foo", b"bar", &SECRETKEY1);
         ctx.4;
         Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"foo" },
         Entry { signature: &ctx.2, pubkey: &ctx.3, message: b"bar" }
@@ -508,7 +506,7 @@ mod test {
 
     make_test! {
         two_signatures_same_message;
-        let ctx = prepare_two_signatures_test(b"foo", b"foo", &KEYPAIR1);
+        let ctx = prepare_two_signatures_test(b"foo", b"foo", &SECRETKEY1);
         ctx.4;
         Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"foo" },
         Entry { signature: &ctx.2, pubkey: &ctx.3, message: b"foo" }
@@ -516,23 +514,21 @@ mod test {
 
     make_test! {
         two_signatures_prefix_message;
-        let ctx = prepare_two_signatures_test(b"foo", b"fo", &KEYPAIR1);
+        let ctx = prepare_two_signatures_test(b"foo", b"fo", &SECRETKEY1);
         ctx.4;
         Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"foo" },
         Entry { signature: &ctx.2, pubkey: &ctx.3, message: b"fo" }
     }
 
-    const KEYPAIR2: [u8; 64] = [
+    const SECRETKEY2: [u8; 32] = [
         157, 97, 177, 157, 239, 253, 90, 96, 186, 132, 74, 244, 146, 236, 44,
         196, 68, 73, 197, 105, 123, 50, 105, 25, 112, 59, 172, 3, 28, 174, 127,
-        96, 215, 90, 152, 1, 130, 177, 10, 183, 213, 75, 254, 211, 201, 100, 7,
-        58, 14, 225, 114, 243, 218, 166, 35, 37, 175, 2, 26, 104, 247, 7, 81,
-        26,
+        96,
     ];
 
     make_test! {
         two_signatures_diff_keys;
-        let ctx = prepare_two_signatures_test(b"foo", b"bar", &KEYPAIR2);
+        let ctx = prepare_two_signatures_test(b"foo", b"bar", &SECRETKEY2);
         ctx.4;
         Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"foo" },
         Entry { signature: &ctx.2, pubkey: &ctx.3, message: b"bar" }
@@ -540,7 +536,7 @@ mod test {
 
     make_test! {
         two_signatures_same_message_diff_keys;
-        let ctx = prepare_two_signatures_test(b"foo", b"foo", &KEYPAIR2);
+        let ctx = prepare_two_signatures_test(b"foo", b"foo", &SECRETKEY2);
         ctx.4;
         Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"foo" },
         Entry { signature: &ctx.2, pubkey: &ctx.3, message: b"foo" }
@@ -548,7 +544,7 @@ mod test {
 
     make_test! {
         two_signatures_prefix_message_diff_keys;
-        let ctx = prepare_two_signatures_test(b"foo", b"fo", &KEYPAIR2);
+        let ctx = prepare_two_signatures_test(b"foo", b"fo", &SECRETKEY2);
         ctx.4;
         Entry { signature: &ctx.0, pubkey: &ctx.1, message: b"foo" },
         Entry { signature: &ctx.2, pubkey: &ctx.3, message: b"fo" }

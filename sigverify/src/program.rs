@@ -8,9 +8,8 @@ use solana_program::instruction::Instruction;
 use solana_program::program_error::ProgramError;
 use solana_program::pubkey::Pubkey;
 use solana_program::rent::Rent;
-use solana_program::system_instruction;
-use solana_program::system_instruction::MAX_PERMITTED_DATA_LENGTH;
 use solana_program::sysvar::{instructions, Sysvar};
+use solana_system_interface::MAX_PERMITTED_DATA_LENGTH;
 
 type Result<T = (), E = ProgramError> = core::result::Result<T, E>;
 
@@ -248,7 +247,7 @@ impl<'a, 'info> Context<'a, 'info> {
 
         let size = MAX_PERMITTED_DATA_INCREASE;
         let required_lamports = Rent::get()?.minimum_balance(size);
-        let instruction = system_instruction::create_account(
+        let instruction = solana_system_interface::instruction::create_account(
             self.payer.key,
             self.signatures.key,
             required_lamports,
@@ -276,7 +275,7 @@ impl<'a, 'info> Context<'a, 'info> {
         }
 
         self.signatures.assign(&solana_program::system_program::ID);
-        self.signatures.realloc(0, false)
+        self.signatures.resize(0)
     }
 
     /// Enlarges the Signatures account by 10 KiB (or to maximum allowable size).
@@ -299,7 +298,7 @@ impl<'a, 'info> Context<'a, 'info> {
         let lamports = required_lamports.saturating_sub(lamports);
         if lamports > 0 {
             solana_program::program::invoke(
-                &system_instruction::transfer(
+                &solana_system_interface::instruction::transfer(
                     self.payer.key,
                     self.signatures.key,
                     lamports,
@@ -308,7 +307,7 @@ impl<'a, 'info> Context<'a, 'info> {
             )?;
         }
 
-        self.signatures.realloc(size, false)
+        self.signatures.resize(size)
     }
 
     /// Returns seeds used to generate Signatures account PDA.

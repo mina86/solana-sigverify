@@ -8,7 +8,7 @@ edition.workspace = true
 derive_more = { workspace = true, features = ["display", "from"] }
 rand = { workspace = true, features = ["thread_rng"] }
 solana-client.workspace = true
-solana-sdk.workspace = true
+solana-sdk = { workspace = true, features = ["full"] }
 solana-transaction-status.workspace = true
 
 sig-data.workspace = true

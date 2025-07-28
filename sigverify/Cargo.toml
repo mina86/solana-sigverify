@@ -17,7 +17,8 @@ lib = []
 [dependencies]
 bytemuck = { workspace = true, features = ["derive", "must_cast"] }
 derive_more = { workspace = true, features = ["as_ref", "deref", "deref_mut", "from", "into"] }
-solana-program = "1.18.26"
+solana-program.workspace = true
+solana-system-interface.workspace = true
 
 solana-native-sigverify.workspace = true
 

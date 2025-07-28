@@ -52,9 +52,8 @@ pub static TESTS: [(Pubkey, Signature, &[u8]); 4] = entries! [
 #[test]
 fn check_entries() {
     for (i, (pubkey, signature, message)) in ENTRIES.iter().enumerate() {
-        let pubkey = ed25519_dalek::PublicKey::from_bytes(pubkey).unwrap();
-        let signature =
-            ed25519_dalek::Signature::from_bytes(signature).unwrap();
+        let pubkey = ed25519_dalek::VerifyingKey::from_bytes(pubkey).unwrap();
+        let signature = ed25519_dalek::Signature::from_bytes(signature);
         if let Err(err) = pubkey.verify_strict(message, &signature) {
             panic!("#{i}: {err}")
         }
@@ -64,9 +63,8 @@ fn check_entries() {
 #[test]
 fn check_tests() {
     for (i, (pubkey, signature, message)) in TESTS.iter().enumerate() {
-        let pubkey = ed25519_dalek::PublicKey::from_bytes(pubkey).unwrap();
-        let signature =
-            ed25519_dalek::Signature::from_bytes(signature).unwrap();
+        let pubkey = ed25519_dalek::VerifyingKey::from_bytes(pubkey).unwrap();
+        let signature = ed25519_dalek::Signature::from_bytes(signature);
         if let Err(err) = pubkey.verify_strict(message, &signature) {
             panic!("#{i}: {err}")
         }

@@ -14,4 +14,5 @@ solana-program.workspace = true
 [dev-dependencies]
 ed25519-dalek.workspace = true
 insta.workspace = true
-solana-sdk.workspace = true
+solana-sdk = { workspace = true, features = ["full"] }
+solana-ed25519-program.workspace = true
