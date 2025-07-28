@@ -220,7 +220,7 @@ fn write_instruction_data(
 /// as [`Error::UnsupportedFeature`] errors.
 ///
 /// Returns [`Error::BadData`] if the data is malformed.
-pub fn parse_data(data: &[u8]) -> Result<Iter, BadData> {
+pub fn parse_data<'a>(data: &'a [u8]) -> Result<Iter<'a>, BadData> {
     match stdx::split_at::<2, u8>(data) {
         Some(([count, 0], rest)) => {
             stdx::as_chunks::<14, u8>(rest).0.get(..usize::from(*count))
