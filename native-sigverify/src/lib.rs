@@ -54,8 +54,8 @@ pub const ED25519_PROGRAM_ID: Pubkey = solana_program::ed25519_program::ID;
 /// Address of the Secp255k1 native program.
 pub const SECP256K1_PROGRAM_ID: Pubkey = solana_program::secp256k1_program::ID;
 /// Address of the Secp255r1 native program.
-// This isn’t defined in solana-program 1.18 but Anza docs lists it, see
-// <https://docs.anza.xyz/runtime/programs#secp256r1-program>.
+// This isn’t defined in solana-program 1.18 but documentation lists it, see
+// <https://solana.com/docs/core/programs#secp256r1-program>.
 pub const SECP256R1_PROGRAM_ID: Pubkey =
     solana_program::pubkey!("Secp256r1SigVerify1111111111111111111111111");
 
