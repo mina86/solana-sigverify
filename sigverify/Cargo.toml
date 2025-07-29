@@ -3,8 +3,11 @@
 
 [package]
 name = "solana-sigverify"
+description = "A Solana program for aggregating cryptographic signatures over multiple transactions."
 authors.workspace = true
 version.workspace = true
+homepage.workspace = true
+license.workspace = true
 edition.workspace = true
 
 [lib]

@@ -3,12 +3,15 @@
 
 [package]
 name = "solana-native-sigverify"
+description = "A library for interacting with Solana signature programs."
 authors.workspace = true
 version.workspace = true
+homepage.workspace = true
+license.workspace = true
 edition.workspace = true
 
 [dependencies]
-bytemuck = { workspace = true, features = ["must_cast"] }
+bytemuck = { workspace = true, features = ["must_cast", "derive"] }
 solana-program.workspace = true
 
 [dev-dependencies]
